@@ -1,0 +1,225 @@
+
+' blKeyboards - the real native Android keyboard: with autocorrect,
+' suggestions and emoji.
+'
+'     If blKeyboard.Visible() Then blKeyboard.Hide() Else blKeyboard.Show()
+'
+'     ' in OnUpdate
+'     If blKeyboard.Changed() Then testo = blKeyboard.Text()
+'
+'
+' WHY MOJO'S EnableKeyboard() IS NOT ENOUGH
+'
+' The system keyboard enables autocorrect and suggestions only if the one
+' with focus offers it a real InputConnection, i.e. essentially an EditText.
+' Cerberus' GameView is a GLSurfaceView and returns a fake one; in fact,
+' the Android target deliberately declares TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+' complete with the comment "voodoo to disable ... predictive text". The
+' characters then arrive from KeyEvent.getUnicodeChar(), which returns 0
+' for emoji.
+'
+' This module adds an invisible EditText to the Activity layout and gives
+' it focus: the keyboard thinks it's typing in a normal field and behaves
+' as such. It doesn't touch the Cerberus installation.
+'
+'
+' The module is called blKeyboards, the class blKeyboard: in Cerberus the
+' module name is already an identifier and the two can't coincide (like
+' blMenus/blMenu, blRequesters/blRequest).
+'
+'
+' ON DESKTOP
+'
+' An on-screen keyboard isn't needed, so Show()/Hide() turn the reading of
+' the physical keyboard on and off and the text is composed from there.
+' However, the app must call blFuncs.ReadTouch() in OnUpdate, because
+' that's the one reading the keys. This way the same example also works
+' on PC.
+
+
+Import mojo2
+Import blFuncs
+
+
+#If TARGET="android" Then
+
+Import "native/blKeyboard-android.java"
+
+Extern
+
+Class BBblKeyboard = "BBblKeyboard"
+
+	Function _Show:Int()
+	Function _Hide:Int()
+	Function _IsVisible:Int()
+	Function _GetText:String()
+	Function _Version:Int()
+	Function _SetText:Int(txt:String)
+
+End
+
+Public
+
+#EndIf
+
+
+Class blKeyboard
+
+	Global lastversion:Int
+	Global wasread:Int
+
+	' Only for the desktop fallback.
+	Global buffer:String
+	Global deskon:Bool
+	Global deskversion:Int
+
+
+	' Opens the keyboard.
+	Function Show:Void()
+
+		#If TARGET="android"
+
+		BBblKeyboard._Show()
+
+		#Else
+
+		deskon = True
+
+		' blFuncs stops swallowing the keys: from here we take them.
+		readkeys = 1
+
+		#EndIf
+
+	End
+
+
+	Function Hide:Void()
+
+		#If TARGET="android"
+
+		BBblKeyboard._Hide()
+
+		#Else
+
+		deskon = False
+
+		#EndIf
+
+	End
+
+
+	Function Visible:Bool()
+
+		#If TARGET="android"
+
+		Return BBblKeyboard._IsVisible() <> 0
+
+		#Else
+
+		Return deskon
+
+		#EndIf
+
+	End
+
+
+	' The text written so far. On Android it comes from the EditText, so
+	' it includes what autocorrect and suggestions put in.
+	Function Text:String()
+
+		#If TARGET="android"
+
+		Return BBblKeyboard._GetText()
+
+		#Else
+
+		Return buffer
+
+		#EndIf
+
+	End
+
+
+	Function SetText:Void(txt:String)
+
+		#If TARGET="android"
+
+		BBblKeyboard._SetText(txt)
+
+		#Else
+
+		buffer = txt
+		deskversion += 1
+
+		#EndIf
+
+	End
+
+
+	Function Clear:Void()
+
+		SetText("")
+
+	End
+
+
+	' Call in OnUpdate: on desktop this is where the pressed keys
+	' enter the text. On Android it's not needed but does no harm.
+	Function Update:Void()
+
+		#If TARGET<>"android"
+
+		If Not deskon Then Return
+
+		Local c:Int = keypress
+
+		If c = 0 Then Return
+
+		If c = 8 Then
+
+			' backspace
+			If buffer.Length > 0 Then buffer = buffer[..buffer.Length - 1]
+
+		ElseIf c = 13 Or c = 10 Then
+
+			buffer = buffer + String.FromChar(10)
+
+		ElseIf c >= 32 Then
+
+			buffer = buffer + String.FromChar(c)
+
+		Else
+
+			Return
+
+		EndIf
+
+		deskversion += 1
+
+		#EndIf
+
+	End
+
+
+	' True once after each text change: so the app re-renders the
+	' caption image only when needed, not every loop.
+	Function Changed:Bool()
+
+		Local v:Int
+
+		#If TARGET="android"
+		v = BBblKeyboard._Version()
+		#Else
+		v = deskversion
+		#EndIf
+
+		If v = lastversion And wasread Then Return False
+
+		lastversion = v
+		wasread = 1
+
+		Return True
+
+	End
+
+End

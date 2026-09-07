@@ -1,0 +1,992 @@
+
+' blMaps - a scrollable map inside the mojo2 canvas.
+'
+'     Field mappa:blMap
+'
+'     ' in OnCreate
+'     blHttpRequest.SetUserAgent("MyApp/1.0 (me@mysite.com)")
+'     mappa = New blMap(45.4642, 9.1900, 14)
+'
+'     ' in OnUpdate, after ReadTouch()
+'     mappa.Update(mx, my, mw, mh)
+'
+'     ' in OnRender
+'     mappa.Draw(cv, mx, my, mw, mh)
+'
+' The map is made of TILES: 256x256 pixel squares downloaded from a server,
+' one for each piece of the world at a given scale. The way to number them
+' (z/x/y, "slippy map") is the same for every service, so changing provider
+' is a single line: SetTileUrl().
+'
+' The default service is OpenStreetMap: free, no key, no registration. In
+' exchange there are RULES, and they're not a formality - those who don't
+' follow them get blocked:
+'
+'   - you must send a User-Agent that identifies the application. The
+'     default value is generic: PUT YOUR OWN with
+'     blHttpRequest.SetUserAgent().
+'   - no more than two connections at once: that's why maxpending is 2;
+'   - tiles already obtained are not requested again (they stay in memory);
+'   - the attribution must be shown, and that's why Draw() writes it by
+'     itself at the bottom of the box. Removing it is against the terms.
+'   - it's a service paid by donations, meant for small uses: for an app
+'     distributed to many people you switch to a real provider (MapTiler,
+'     Thunderforest, Stadia, Geoapify... all with a free plan but with a
+'     key to put in the address), or you keep the tiles of your area inside
+'     the app data.
+'
+' Other keyless services, if you need a different look:
+'
+'     mappa.SetTileUrl("https://tile.opentopomap.org/{z}/{x}/{y}.png")
+'     mappa.SetTileUrl("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}")
+'
+' The last one is satellite and has {y} BEFORE {x}: the address template
+' puts them where they're needed, so it works anyway.
+'
+' The tiles are downloaded and decoded by blHttpRequests, which has natives
+' on desktop, Android and html5 (on iOS it downloads but doesn't decode
+' yet). Where there's no decoding, the map draws a grid with the tile
+' numbers instead of the images: the app code doesn't change and the
+' geometry is still visible.
+'
+' CX modules by bosh77
+
+
+Import mojo2
+
+Import blConsts
+Import blFuncs
+Import blHttpRequests
+
+
+' A tile: the image, or the wait for it to arrive.
+Class blMapTile
+
+	Field key:String
+
+	Field req:blHttpRequest
+	Field img:Image
+
+	Field failed:Bool
+
+	' The request has finished (good or bad) and has already been taken off
+	' the count of those in flight.
+	Field settled:Bool
+
+	' last frame in which it was used: it's the number that decides who gets
+	' thrown away when memory fills up
+	Field used:Int
+
+End
+
+
+Class blMap
+
+	' The side of a tile, in pixels. It's 256 for all services.
+	Const TILEPIX:Int = 256
+
+	' Beyond 85.0511 degrees the Mercator projection goes to infinity: that's
+	' why the poles aren't in web maps.
+	Const MAXLAT:Float = 85.05112
+
+	Field lat:Float
+	Field lon:Float
+
+	Field zoom:Int
+
+	Field minzoom:Int = 2
+	Field maxzoom:Int = 19
+
+	' How much to enlarge the tiles. On a phone with 2340 pixels of height a
+	' tile at natural size is a stamp: you pass the app's K().
+	Field scale:Float = 1.0
+
+	Field tileurl:String = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+
+	Field attribution:String = "(c) OpenStreetMap contributors"
+	Field showattribution:Bool = True
+
+	Field showscalebar:Bool = True
+
+	' Background color, the one seen where the tile hasn't arrived yet.
+	Field background:Int = $20242A
+
+	' How many tiles to keep in memory. 160 are four full screens: you go back
+	' without downloading anything again.
+	Field maxtiles:Int = 160
+
+	' How many requests to keep in flight. TWO, and it's not a random number:
+	' the OpenStreetMap terms ask not to open more than two connections to
+	' their servers at once. Those who switch to another provider can raise it.
+	Field maxpending:Int = 2
+
+	' While it's on the map follows the GPS position; the first drag turns it
+	' off, because it's the user who decided where to look.
+	Field follow:Bool = True
+
+	Field tiles:StringMap<blMapTile>
+
+	Field tick:Int
+
+	Field dragging:Bool
+	Field moved:Bool
+
+	Field pending:Int
+
+	' the markers
+	Field mklat:Float[]
+	Field mklon:Float[]
+	Field mkcol:Int[]
+	Field mkcount:Int
+
+
+	Method New(la:Float = 41.9028, lo:Float = 12.4964, z:Int = 13)
+
+		tiles = New StringMap<blMapTile>
+
+		mklat = New Float[8]
+		mklon = New Float[8]
+		mkcol = New Int[8]
+
+		SetCenter(la, lo)
+		SetZoom(z)
+
+	End
+
+
+	'#########################################################################
+	' WHERE YOU LOOK
+	'#########################################################################
+
+	Method SetCenter:Void(la:Float, lo:Float)
+
+		If la > MAXLAT Then la = MAXLAT
+		If la < -MAXLAT Then la = -MAXLAT
+
+		' Longitude wraps around: whoever exits one side comes back in the other.
+		While lo > 180.0
+			lo -= 360.0
+		Wend
+
+		While lo < -180.0
+			lo += 360.0
+		Wend
+
+		lat = la
+		lon = lo
+
+	End
+
+
+	Method SetZoom:Void(z:Int)
+
+		If z < minzoom Then z = minzoom
+		If z > maxzoom Then z = maxzoom
+
+		zoom = z
+
+	End
+
+
+	Method ZoomIn:Void()
+
+		SetZoom(zoom + 1)
+
+	End
+
+
+	Method ZoomOut:Void()
+
+		SetZoom(zoom - 1)
+
+	End
+
+
+	' Zooms keeping still the point under (sx, sy): that's what the wheel
+	' does in all maps, and without this the map "runs away".
+	Method ZoomAt:Void(dz:Int, sx:Float, sy:Float, x:Float, y:Float, w:Float, h:Float)
+
+		Local nz:Int = zoom + dz
+
+		If nz < minzoom Then nz = minzoom
+		If nz > maxzoom Then nz = maxzoom
+
+		If nz = zoom Then Return
+
+		' the point of the world that must stay where it is
+		Local pla:Float = LatAt(sy, y, h)
+		Local plo:Float = LonAt(sx, x, w)
+
+		Local ts:Float = TileSize()
+
+		zoom = nz
+
+		' the center that puts that point back under the same pixel
+		Local tx:Float = TileX(plo, zoom) - (sx - (x + w / 2.0)) / ts
+		Local ty:Float = TileY(pla, zoom) - (sy - (y + h / 2.0)) / ts
+
+		SetCenter(TileLat(ty, zoom), TileLon(tx, zoom))
+
+	End
+
+
+	Method TileSize:Float()
+
+		Return TILEPIX * scale
+
+	End
+
+
+	' How many meters of ground a screen pixel holds. Needed by the scale bar
+	' and to draw the circle of the GPS accuracy.
+	Method MetersPerPixel:Float()
+
+		' 156543.034 is the Earth's circumference divided by the 256 pixels of
+		' the tile at zoom 0. The cosine tightens the meridians as you go up
+		' towards the pole.
+		Local n:Float = Pow(2.0, zoom)
+
+		Return 156543.034 * Cosr(lat * PI / 180.0) / n / scale
+
+	End
+
+
+	'#########################################################################
+	' FROM SCREEN TO COORDINATES AND BACK
+	'#########################################################################
+
+	Method ScreenX:Float(lo:Float, x:Float, w:Float)
+
+		Local ts:Float = TileSize()
+
+		Return x + w / 2.0 + (TileX(lo, zoom) - TileX(lon, zoom)) * ts
+
+	End
+
+
+	Method ScreenY:Float(la:Float, y:Float, h:Float)
+
+		Local ts:Float = TileSize()
+
+		Return y + h / 2.0 + (TileY(la, zoom) - TileY(lat, zoom)) * ts
+
+	End
+
+
+	Method LonAt:Float(sx:Float, x:Float, w:Float)
+
+		Local ts:Float = TileSize()
+
+		Return TileLon(TileX(lon, zoom) + (sx - (x + w / 2.0)) / ts, zoom)
+
+	End
+
+
+	Method LatAt:Float(sy:Float, y:Float, h:Float)
+
+		Local ts:Float = TileSize()
+
+		Return TileLat(TileY(lat, zoom) + (sy - (y + h / 2.0)) / ts, zoom)
+
+	End
+
+
+	'#########################################################################
+	' MARKERS
+	'#########################################################################
+
+	Method AddMarker:Void(la:Float, lo:Float, col:Int = $E84C3D)
+
+		If mkcount >= mklat.Length Then
+
+			mklat = mklat.Resize(mkcount * 2)
+			mklon = mklon.Resize(mkcount * 2)
+			mkcol = mkcol.Resize(mkcount * 2)
+
+		EndIf
+
+		mklat[mkcount] = la
+		mklon[mkcount] = lo
+		mkcol[mkcount] = col
+
+		mkcount += 1
+
+	End
+
+
+	Method ClearMarkers:Void()
+
+		mkcount = 0
+
+	End
+
+
+	'#########################################################################
+	' UPDATING
+	'#########################################################################
+
+	' Call it in OnUpdate, AFTER ReadTouch(). x, y, w, h are the box where
+	' the map lives: outside it the touch doesn't concern it.
+	Method Update:Void(x:Float, y:Float, w:Float, h:Float)
+
+		SweepRequests()
+
+		Local inside:Bool = IsOnRect(Int(x), Int(y), Int(w), Int(h)) <> 0
+
+		' --- wheel: zooms around the pointer
+		If inside And zmou <> 0 Then
+
+			ZoomAt(zmou, xmou, ymou, x, y, w, h)
+
+			follow = False
+
+		EndIf
+
+		' --- dragging
+
+		If touchhit And inside Then
+
+			dragging = True
+			moved = False
+
+			' Double tap zooms in: on a phone it's the only comfortable way,
+			' since there's no wheel.
+			If dclick Then
+
+				ZoomAt(1, xmou, ymou, x, y, w, h)
+
+				follow = False
+				dclick = 0
+
+			EndIf
+
+		EndIf
+
+		' ispre and not touchdown: touchdown starts from the frame AFTER the
+		' press, and the first bit of dragging would be lost.
+		If dragging And ispre Then
+
+			Local dx:Float = xmou - xmou2
+			Local dy:Float = ymou - ymou2
+
+			' In the press frame xmou2 is where the finger was BEFORE: on a
+			' phone it can be on the other side of the screen, and the map
+			' would jump. That frame is skipped.
+			If Not touchhit And (dx <> 0 Or dy <> 0) Then
+
+				Local ts:Float = TileSize()
+
+				Local tx:Float = TileX(lon, zoom) - dx / ts
+				Local ty:Float = TileY(lat, zoom) - dy / ts
+
+				SetCenter(TileLat(ty, zoom), TileLon(tx, zoom))
+
+				moved = True
+				follow = False
+
+			EndIf
+
+		EndIf
+
+		If Not ispre Then dragging = False
+
+	End
+
+
+	' Takes off the count of the in-flight requests the ones that finished.
+	'
+	' It really is needed, and it was the sneakiest bug of this module: the
+	' count CANNOT drop when the tile is drawn, because a tile can easily
+	' have left the screen before arriving - the map just has to move, and
+	' that's exactly what it does at startup when the GPS gives the first
+	' position. Nobody redraws those tiles anymore, the count stays up, and
+	' with the cap at two requests the map stops downloading ANYTHING forever.
+	'
+	' Same story for the failed tiles: four errors (a tunnel, the wifi
+	' dropping) and the map would have stopped.
+	Method SweepRequests:Void()
+
+		If pending <= 0 Then Return
+
+		For Local t:blMapTile = Eachin tiles.Values()
+
+			If t.req = Null Then Continue
+			If t.settled Then Continue
+
+			If Not t.req.Done() Then Continue
+
+			' It finished: it frees the slot, whoever it was.
+			t.settled = True
+			pending -= 1
+
+			If t.req.Failed() Then
+
+				t.failed = True
+				t.req.Discard()
+				t.req = Null
+
+			EndIf
+
+			' If it went well the request stays there with the decoded image
+			' inside: it will become a texture the first time the tile is seen
+			' again, and meanwhile it doesn't block anyone anymore.
+
+		Next
+
+	End
+
+
+	' True if the user is dragging the map: the app checks it so it doesn't
+	' mistake the end of a drag for a tap on a command.
+	Method Dragging:Bool()
+
+		Return dragging And moved
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method Draw:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		If w < 1 Or h < 1 Then Return
+
+		tick += 1
+
+		' The four values must be COPIED, not kept by reference:
+		' Canvas.Scissor returns the internal mojo2 array, and SetScissor
+		' writes inside that same array. Keeping the array "restores" the
+		' new clip and everything drawn afterwards disappears.
+		Local scx:Int = canv.Scissor[0]
+		Local scy:Int = canv.Scissor[1]
+		Local scw:Int = canv.Scissor[2]
+		Local sch:Int = canv.Scissor[3]
+
+		canv.SetScissor(Int(x), Int(y), Int(w), Int(h))
+
+		canv.SetColor(background)
+		canv.DrawRect(x, y, w, h)
+
+		If blHttpRequest.Available() Then
+			DrawTiles(canv, x, y, w, h)
+		Else
+			DrawGrid(canv, x, y, w, h)
+		EndIf
+
+		DrawMarkers(canv, x, y, w, h)
+
+		If showscalebar Then DrawScaleBar(canv, x, y, w, h)
+
+		If showattribution Then DrawAttribution(canv, x, y, w, h)
+
+		canv.SetScissor(scx, scy, scw, sch)
+
+		canv.SetColor(COL_WHITE)
+
+	End
+
+
+	Method DrawTiles:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		Local ts:Float = TileSize()
+
+		' how many tiles the world has at this scale
+		Local n:Int = 1 Shl zoom
+
+		Local cx:Float = TileX(lon, zoom)
+		Local cy:Float = TileY(lat, zoom)
+
+		' The integer index and the fraction are kept separate: subtracting two
+		' big numbers in Float, at high zoom, would lose the pixels. Like
+		' this instead the sums stay small.
+		Local cxi:Int = Int(Floor(cx))
+		Local cyi:Int = Int(Floor(cy))
+
+		Local cxf:Float = cx - Floor(cx)
+		Local cyf:Float = cy - Floor(cy)
+
+		' top-left corner of the center tile, on screen
+		Local ox:Float = x + w / 2.0 - cxf * ts
+		Local oy:Float = y + h / 2.0 - cyf * ts
+
+		Local i0:Int = Int(Floor((x - ox) / ts))
+		Local i1:Int = Int(Floor((x + w - ox) / ts))
+		Local j0:Int = Int(Floor((y - oy) / ts))
+		Local j1:Int = Int(Floor((y + h - oy) / ts))
+
+		For Local j:Int = j0 To j1
+
+			Local ty:Int = cyi + j
+
+			' Above the north pole and below the south one there's no tile:
+			' the map ends, it doesn't wrap.
+			If ty < 0 Or ty >= n Then Continue
+
+			For Local i:Int = i0 To i1
+
+				' Longitude instead wraps: tile -1 is the last one.
+				Local tx:Int = (cxi + i) Mod n
+				If tx < 0 Then tx += n
+
+				Local px:Float = ox + i * ts
+				Local py:Float = oy + j * ts
+
+				Local t:blMapTile = Tile(zoom, tx, ty)
+
+				If t = Null Then Continue
+
+				t.used = tick
+
+				Local im:Image = Null
+
+				If t.img <> Null Then
+					im = t.img
+				ElseIf t.req <> Null
+
+					' The request may not have finished yet: ToImage returns
+					' Null and it's retried next frame. The count of the
+					' in-flight requests is NOT touched here - SweepRequests
+					' does it, and it also sees the tiles that left the
+					' screen.
+					im = t.req.ToImage()
+
+					If im <> Null Then
+						t.img = im
+						t.req = Null
+					EndIf
+
+				EndIf
+
+				If im <> Null Then
+
+					' Full white: the current color multiplies the tile's one
+					' and would dirty it.
+					canv.SetColor(COL_WHITE)
+					canv.DrawRect(px, py, ts, ts, im)
+
+				EndIf
+
+			Next
+
+		Next
+
+		Purge()
+
+	End
+
+
+	' The fallback where there's no network native: a grid with the
+	' coordinates. It's not a map, but it shows that the scrolling and the
+	' scale work.
+	Method DrawGrid:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		Local ts:Float = TileSize()
+
+		Local cx:Float = TileX(lon, zoom)
+		Local cy:Float = TileY(lat, zoom)
+
+		Local cxi:Int = Int(Floor(cx))
+		Local cyi:Int = Int(Floor(cy))
+
+		Local ox:Float = x + w / 2.0 - (cx - Floor(cx)) * ts
+		Local oy:Float = y + h / 2.0 - (cy - Floor(cy)) * ts
+
+		Local i0:Int = Int(Floor((x - ox) / ts))
+		Local i1:Int = Int(Floor((x + w - ox) / ts))
+		Local j0:Int = Int(Floor((y - oy) / ts))
+		Local j1:Int = Int(Floor((y + h - oy) / ts))
+
+		canv.SetColor(COL_DARKSLATEGRAY)
+
+		For Local i:Int = i0 To i1 + 1
+			canv.DrawRect(ox + i * ts, y, 1 * scale, h)
+		Next
+
+		For Local j:Int = j0 To j1 + 1
+			canv.DrawRect(x, oy + j * ts, w, 1 * scale)
+		Next
+
+		canv.SetColor(COL_SLATEGRAY)
+
+		For Local j:Int = j0 To j1
+
+			For Local i:Int = i0 To i1
+
+				Local px:Float = ox + i * ts + 6 * scale
+				Local py:Float = oy + j * ts + 6 * scale
+
+				Text(canv, zoom + "/" + (cxi + i) + "/" + (cyi + j), px, py)
+
+			Next
+
+		Next
+
+		canv.SetColor(COL_CORNFLOWERBLUE)
+		Text(canv, "no network native on this target", x + 10 * scale, y + 10 * scale)
+
+	End
+
+
+	Method DrawMarkers:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		Local r:Float = 7.0 * scale
+
+		For Local i:Int = 0 Until mkcount
+
+			Local px:Float = ScreenX(mklon[i], x, w)
+			Local py:Float = ScreenY(mklat[i], y, h)
+
+			If px < x - r Or px > x + w + r Then Continue
+			If py < y - r Or py > y + h + r Then Continue
+
+			' white border: on a colored map a solid-color dot
+			' disappears
+			canv.SetColor(COL_WHITE)
+			canv.DrawCircle(px, py, r + 2.0 * scale)
+
+			canv.SetColor(mkcol[i])
+			canv.DrawCircle(px, py, r)
+
+		Next
+
+	End
+
+
+	' The GPS uncertainty circle, drawn at the right scale. The radius is in
+	' METERS, not pixels: when you zoom in it widens.
+	Method DrawAccuracy:Void(canv:Canvas, la:Float, lo:Float, metri:Float, x:Float, y:Float, w:Float, h:Float, col:Int = $4A90D9)
+
+		If metri <= 0 Then Return
+
+		Local mpp:Float = MetersPerPixel()
+		If mpp <= 0 Then Return
+
+		Local r:Float = metri / mpp
+
+		' Below a few pixels it's not visible and above the whole screen it says
+		' nothing anymore: in both cases it's left alone.
+		If r < 3 Then Return
+		If r > w * 4 Then Return
+
+		Local px:Float = ScreenX(lo, x, w)
+		Local py:Float = ScreenY(la, y, h)
+
+		canv.SetAlpha(0.18)
+		canv.SetColor(col)
+		canv.DrawCircle(px, py, r)
+
+		canv.SetAlpha(1.0)
+
+	End
+
+
+	Method DrawScaleBar:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		Local mpp:Float = MetersPerPixel()
+		If mpp <= 0 Then Return
+
+		' You start from a comfortable on-screen length and round down to the
+		' nearest round measure: a bar that says "137 m" is useless to everyone.
+		Local target:Float = 110.0 * scale
+
+		Local metri:Float = target * mpp
+
+		Local passo:Float = 1.0
+
+		While passo * 10.0 <= metri
+			passo *= 10.0
+		Wend
+
+		Local mult:Float = 1.0
+
+		If metri / passo >= 5.0 Then
+			mult = 5.0
+		ElseIf metri / passo >= 2.0
+			mult = 2.0
+		EndIf
+
+		metri = passo * mult
+
+		Local lung:Float = metri / mpp
+
+		Local bx:Float = x + 10 * scale
+		Local by:Float = y + h - 34 * scale
+
+		canv.SetColor(COL_BLACK)
+		canv.DrawRect(bx - 1 * scale, by - 1 * scale, lung + 2 * scale, 5 * scale)
+
+		canv.SetColor(COL_WHITE)
+		canv.DrawRect(bx, by, lung, 3 * scale)
+		canv.DrawRect(bx, by - 3 * scale, 1 * scale, 9 * scale)
+		canv.DrawRect(bx + lung - 1 * scale, by - 3 * scale, 1 * scale, 9 * scale)
+
+		Local et:String = Int(metri) + " m"
+
+		If metri >= 1000 Then et = Int(metri / 1000) + " km"
+
+		Text(canv, et, bx, by - 18 * scale)
+
+	End
+
+
+	Method DrawAttribution:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		If attribution.Length = 0 Then Return
+
+		Local ty:Float = y + h - 14 * scale
+
+		' a dark shade underneath, otherwise on a light map it's unreadable
+		canv.SetAlpha(0.45)
+		canv.SetColor(COL_BLACK)
+		canv.DrawRect(x, ty - 2 * scale, w, 16 * scale)
+
+		canv.SetAlpha(1.0)
+		canv.SetColor(COL_WHITE)
+
+		Text(canv, attribution, x + 6 * scale, ty)
+
+	End
+
+
+	' mojo2's DrawText draws at a fixed size: without scaling the matrix,
+	' on a phone the texts would be unreadable.
+	Method Text:Void(canv:Canvas, s:String, px:Float, py:Float)
+
+		canv.PushMatrix()
+		canv.Translate(px, py)
+		canv.Scale(scale, scale)
+		canv.DrawText(s, 0, 0)
+		canv.PopMatrix()
+
+	End
+
+
+	'#########################################################################
+	' THE TILES
+	'#########################################################################
+
+	Method SetTileUrl:Void(url:String, attrib:String = "")
+
+		If url = tileurl Then Return
+
+		tileurl = url
+
+		If attrib.Length > 0 Then attribution = attrib
+
+		' Changing provider means throwing everything away: the old images
+		' belong to another map.
+		Clear()
+
+	End
+
+
+	Method Clear:Void()
+
+		For Local t:blMapTile = Eachin tiles.Values()
+
+			If t.req <> Null Then t.req.Discard()
+
+			If t.img <> Null Then t.img.Discard()
+
+		Next
+
+		tiles.Clear()
+
+		pending = 0
+
+	End
+
+
+	Method TileCount:Int()
+
+		Return tiles.Count()
+
+	End
+
+
+	Method Pending:Int()
+
+		Return pending
+
+	End
+
+
+	' The tile, if it exists; otherwise it queues it and returns Null until
+	' it arrives. Never blocks.
+	Method Tile:blMapTile(z:Int, tx:Int, ty:Int)
+
+		Local key:String = z + "/" + tx + "/" + ty
+
+		Local t:blMapTile = tiles.Get(key)
+
+		If t <> Null Then Return t
+
+		' More requests than this at once don't help: the native serves two at a
+		' time and the others would just queue. Dragging fast you'd end up
+		' asking half the world.
+		If pending >= maxpending Then Return Null
+
+		t = New blMapTile
+
+		t.key = key
+		t.used = tick
+		t.req = New blHttpRequest("GET", TileUrl(z, tx, ty))
+
+		' Before Send: this way the tile is decoded on the background thread
+		' and drawing only has the copy in the texture left.
+		t.req.WantImage()
+		t.req.Send()
+
+		tiles.Set(key, t)
+
+		pending += 1
+
+		Return t
+
+	End
+
+
+	Method TileUrl:String(z:Int, tx:Int, ty:Int)
+
+		Local u:String = tileurl
+
+		u = u.Replace("{z}", String(z))
+		u = u.Replace("{x}", String(tx))
+		u = u.Replace("{y}", String(ty))
+
+		' Some services have three identical machine names (a, b, c) to share
+		' the traffic. If the address has no {s} it's not needed.
+		If u.Find("{s}") <> -1 Then
+
+			Local srv:String = "abc"[(tx + ty) Mod 3 .. (tx + ty) Mod 3 + 1]
+
+			u = u.Replace("{s}", srv)
+
+		EndIf
+
+		Return u
+
+	End
+
+
+	' Throws away the tiles that haven't been seen for the longest time.
+	' Without this, going around the world the memory only grows.
+	Method Purge:Void()
+
+		If tiles.Count() <= maxtiles Then Return
+
+		Local togliere:Int = tiles.Count() - maxtiles
+
+		' Only the OLDEST ones are thrown away, as many as needed to get back
+		' under the cap. Throwing away everything not seen at this instant
+		' would be simpler but would empty the memory every frame, and
+		' retracing your steps the map would keep downloading: exactly what
+		' the OpenStreetMap terms ask to avoid.
+		Local eta:IntStack = New IntStack(New Int[0])
+
+		For Local t:blMapTile = Eachin tiles.Values()
+
+			' A request STILL IN PROGRESS is not thrown away: the native is
+			' downloading and the pending count would get skewed. A finished
+			' one instead can be thrown away like any other.
+			If t.req <> Null And Not t.settled Then Continue
+
+			' It's visible now.
+			If t.used >= tick Then Continue
+
+			eta.Push(t.used)
+
+		Next
+
+		If togliere > eta.Length() Then togliere = eta.Length()
+		If togliere <= 0 Then Return
+
+		eta.Sort()
+
+		Local soglia:Int = eta.Get(togliere - 1)
+
+		' Two passes: first the keys are collected, then they're removed.
+		' Deleting while iterating the map isn't safe.
+		Local morti:Stack<String> = New Stack<String>
+
+		For Local n:= Eachin tiles
+
+			Local t:blMapTile = n.Value()
+
+			If t.req <> Null And Not t.settled Then Continue
+			If t.used >= tick Then Continue
+
+			If t.used <= soglia Then morti.Push(n.Key())
+
+		Next
+
+		For Local k:String = Eachin morti
+
+			Local t:blMapTile = tiles.Get(k)
+
+			' The texture must be thrown away by hand: the Image holds an OpenGL
+			' object, and waiting for the collector means keeping in video
+			' memory all the tiles seen since startup.
+			If t <> Null Then
+
+				If t.img <> Null Then t.img.Discard()
+
+				' A finished request never drawn still holds the decoded pixels in the
+				' native: they must be let go.
+				If t.req <> Null Then t.req.Discard()
+
+			EndIf
+
+			tiles.Remove(k)
+
+		Next
+
+	End
+
+
+	'#########################################################################
+	' THE MATH OF THE PROJECTION
+	'
+	' It's the spherical Mercator, the one all web maps use. The formulas
+	' are the standard ones of the "slippy map" scheme: those who change
+	' them change the map.
+	'#########################################################################
+
+	Function TileX:Float(lo:Float, z:Int)
+
+		Return (lo + 180.0) / 360.0 * Pow(2.0, z)
+
+	End
+
+
+	Function TileY:Float(la:Float, z:Int)
+
+		If la > MAXLAT Then la = MAXLAT
+		If la < -MAXLAT Then la = -MAXLAT
+
+		Local r:Float = la * PI / 180.0
+
+		Return (1.0 - Log(Tanr(r) + 1.0 / Cosr(r)) / PI) / 2.0 * Pow(2.0, z)
+
+	End
+
+
+	Function TileLon:Float(tx:Float, z:Int)
+
+		Return tx / Pow(2.0, z) * 360.0 - 180.0
+
+	End
+
+
+	Function TileLat:Float(ty:Float, z:Int)
+
+		Local a:Float = PI - TWOPI * ty / Pow(2.0, z)
+
+		' The hyperbolic sine written out longhand: Cerberus doesn't have it.
+		Return 180.0 / PI * ATanr(0.5 * (Exp(a) - Exp(-a)))
+
+	End
+
+End

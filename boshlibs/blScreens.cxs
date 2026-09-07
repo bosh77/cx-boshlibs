@@ -1,0 +1,1460 @@
+
+Import mojo2
+
+Import blTheme
+Import blHooks
+Import blFuncs
+Import brl.filestream
+Import brl.filesystem
+Import brl.filepath
+Import blGraphics
+
+
+' L'immagine viaggia col modulo: nessuna app deve fornirla. Nota: Cerberus
+' appiattisce i percorsi dei dati importati, quindi niente sottocartelle.
+Import "data/objsnew.png"
+
+
+Class blScreen Extends blGraphic
+		
+	Const kanchor = 5
+	
+	'Field objs:= New List<blGraphic>
+	
+	'	Method New(canva:Canvas, x, y, w, h)
+	'
+	'		Self.canv = canva
+	'
+	'		Self.xsc = x
+	'		Self.ysc = y
+	'		Self.wsc = w
+	'		Self.hsc = h
+	'
+	'	End Method
+
+	Method New(canva:Canvas, x1:Float, y1:Float, x2:Float, y2:Float)
+		
+		objsimg = Image.Load("cerberus://data/objsnew.png", 0, 0, 0)
+		
+		Self.canv = canva
+		
+		Self.xo1 = x1
+		Self.yo1 = y1
+		Self.xo2 = x2
+		Self.yo2 = y2
+	
+		ScrX = GetAbsScrX(xo1)
+		ScrY = GetAbsScrY1(yo1)
+		ScrW = GetAbsScrX(xo2) - ScrX
+		ScrH = GetAbsScrY2(yo2) - ScrY
+		
+		
+		
+		'		ScrX = GetAbsScrX(xo1)
+		'		ScrY = GetAbsScrY(yo1)
+		'		ScrW = GetAbsScrX(xo2) - ScrX
+		'		ScrH = GetAbsScrY(yo2) - ScrY
+		
+		
+		
+		'		xca = DeviceWidth * x
+		'		yca = DeviceHeight * y
+		'		wca = DeviceWidth * w
+		'		hca = DeviceHeight * h
+		
+	End Method
+	
+	Method Draw()
+		
+		canv.SetColor 0.2, 0.2, 0.2
+		
+		'		Local xca = DeviceWidth * xp
+		'		Local yca = DeviceHeight * yp
+		'		Local wca = DeviceWidth * wp
+		'		Local hca = DeviceHeight * hp
+		
+		'		Local xca = xsc
+		'		Local yca = ysc
+		'		Local wca = wsc
+		'		Local hca = hsc
+
+		ScrX = GetAbsScrX(xo1)
+		ScrY = GetAbsScrY1(yo1)
+		ScrW = GetAbsScrX(xo2) - ScrX
+		ScrH = GetAbsScrY2(yo2) - ScrY
+		
+		'		Local xca1 = GetAbsX(xo1) '+ ScrX
+		'		Local yca1 = GetAbsY(yo1) '+ ScrY
+		'		Local xca2 = GetAbsX(xo2) '+ ScrX
+		'		Local yca2 = GetAbsY(yo2) '+ ScrY
+		'
+		'		xca1 = ScrX
+		'		yca1 = ScrY
+		'		xca2 = ScrW
+		'		yca2 = ScrH
+		
+		'Print ScrW + "," + ScrH
+		
+		'xca1 = GetAbsScrX(xo1)
+		'yca1 = GetAbsScrY(yo1)
+		'xca2 = GetAbsScrX(xo2) - xca1
+		'yca2 = GetAbsScrY(yo2) - yca1
+		
+		canv.DrawRect(ScrX, ScrY, ScrW, ScrH)
+				
+		Local drawlogo = 1
+		
+		cursorvis2 = 0
+		
+		For Local o:= EachIn objs
+			
+			'Local t = o.typeobj
+			
+			'Select t
+			'Case 1
+			'o.DrawSheet(canv, xca, yca, wca, hca)
+			'Case 2
+			o.DrawWin(canv, ScrX, ScrY, ScrW, ScrH)
+			'End
+			
+			'canv.SetColor 0.3, 0, 0
+			
+			'Local xx1 = ScrX + GetAbsX(o.xo1)
+			'Local yy1 = ScrY + GetAbsY(o.yo1)
+			'Local xx2 = (GetAbsX(o.xo2) - GetAbsX(o.xo1))
+			'Local yy2 = (GetAbsY(o.yo2) - GetAbsY(o.yo1))
+			
+			'canv.DrawRect(xx1 + 10, yy1 + 10, xx2 - 20, yy2 - 20)
+			drawlogo = 0
+			
+		Next
+		
+		'note: DRAW LOGO
+		
+		If drawlogo Then
+				
+			Local s:Float = ScrH / Float(logo.Height)
+				
+			Local nw:Float = logo.Width * s
+				
+			Local nw2 = (ScrW - nw) / 2.0
+				
+			canv.SetAlpha 0.4
+			canv.SetColor 1, 1, 1
+			canv.DrawImage(logo, ScrX + nw2, ScrY, 0, s, s)
+
+			canv.SetAlpha 0.5
+			canv.SetColor 1, 1, 0
+			
+			If idmenustart >= 0 Then
+			
+				canv.DrawRect(ScrX, ScrY + idmenustart * 128, 600, 128)
+			
+			EndIf
+				
+			canv.SetAlpha 1
+			canv.SetColor 1, 1, 1
+						
+			canv.DrawImage(menustart, ScrX, ScrY)
+				
+				
+		EndIf
+							
+		'Local kanchor = 5
+		
+		'note: DRAW SPLITTERS
+		
+		For Local o:= EachIn blSplitter.splits
+		
+			If o.leftsplitter Then o.X1 = o.leftsplitter.X1 'X
+			If o.rightsplitter Then o.X2 = o.rightsplitter.X2 'X
+		
+			If o.topsplitter Then o.Y1 = o.topsplitter.Y1 'Y
+			If o.bottomsplitter Then o.Y2 = o.bottomsplitter.Y2 'Y
+			
+			
+			'Local xca2 = o.x1 '+ ScrX
+			'Local yca2 = o.y1 '+ ScrY
+			'Local wca2 = o.x2 '+ ScrX
+			'Local hca2 = o.y2 '+ ScrY
+			
+			Local xca1 = GetAbsX(o.X1) + ScrX '+ xca
+			Local yca1 = GetAbsY(o.Y1) + ScrY '+ yca
+			Local wca1 = GetAbsX(o.X2) + ScrX '+ xca
+			Local hca1 = GetAbsY(o.Y2) + ScrY '+ yca
+			
+			'If o.drawon Then
+			
+			'*new*
+			If o.drawon or o.dragging Then
+				
+				'canv.SetColor 1, 0, 0
+				'canv.SetColor 0, 0.9, 0.7
+				canv.SetColor 1, 1, 0
+				
+				Select o.orient
+			
+					Case 0
+										
+						canv.DrawRect(xca1 - 2, yca1, 4, hca1 - yca1)
+						
+					Case 1
+						
+						canv.DrawRect(xca1, yca1 - 2, wca1 - xca1, 4)
+						
+				End
+				
+			EndIf
+			
+			'			If xmou > xca2 - kanchor and xmou < xca2 + kanchor Then
+			'
+			'				o.drawon = 1
+			'
+			'			Else
+			'
+			'				o.drawon = 0
+			'
+			'
+			'			EndIf
+		
+		Next
+		
+		
+	End Method
+	
+	Method Update()
+	
+		Local updlogo = 1
+		
+		For Local o:= EachIn objs
+			
+			'Local t = o.typeobj
+			
+			'Select t
+			'Case 1
+			'o.DrawSheet(canv, xca, yca, wca, hca)
+			'Case 2
+			o.UpdateWin(ScrX, ScrY, ScrW, ScrH)
+			'End
+			
+						
+			'canv.DrawRect(xx1 + 10, yy1 + 10, xx2 - 20, yy2 - 20)
+			
+			updlogo = 0
+				
+		Next
+		
+		
+		If updlogo Then
+			
+			For Local i = 0 To 2
+		
+				If IsOnRect(ScrX, ScrY + i * 128, 600, 128) Then
+					
+					idmenustart = i
+				
+					If touchhit Then
+										
+						Select i
+							Case 0
+								NewProject
+								LostFocus
+								
+							Case 1
+								NewSolution
+								LostFocus
+							 
+							Case 2
+								OpenProject("")
+								CreateHistory
+								
+						End
+					
+					EndIf
+				
+				EndIf
+			
+			Next
+			
+		EndIf
+		
+	
+		
+	
+		'Local xca = GetAbsX(xo1)
+		'Local yca = GetAbsY(yo1)
+		'Local wca = GetAbsX(xo2)
+		'Local hca = GetAbsY(yo2)
+				
+		'		canv.DrawRect(xca, yca, wca, hca)
+		'
+		'		For Local o:= EachIn objs
+		'
+		'			'			Local t = o.typeobj
+		'			'
+		'			'			Select t
+		'			'				Case 1
+		'			'					o.DrawSheet(canv, xca, yca, wca, hca)
+		'			'				Case 2
+		'			'					o.DrawWin(canv, xca, yca, wca, hca)
+		'			'			End
+		'
+		'			Local xca2 = GetAbsX(o.xo) + xca
+		'			Local yca2 = GetAbsY(o.yo) + yca
+		'			Local wca2 = GetAbsX(o.wo) + xca2
+		'			Local hca2 = GetAbsY(o.ho) + yca2
+		'
+		'			'If o.hook2 = 0 Then
+		'			If lmou and hook = 0 Then
+		'
+		'				If xmou > xca2 - kanchor and xmou < xca2 + kanchor Then
+		'
+		'					'o.xo = o.xo + 0.01
+		'					'o.wo = o.wo - 0.01
+		'					hook = 1
+		'					o.hookx = 1
+		'					o.hookw = 1
+		'
+		'					o.hookvalx = xmou '- xca2
+		'
+		'				EndIf
+		'
+		'				If xmou > wca2 - kanchor and xmou < wca2 + kanchor Then
+		'
+		'					'o.wo = o.wo + 0.01
+		'					hook = 1
+		'					o.hookw = 1
+		'
+		'					o.hookvalw = xmou
+		'
+		'				EndIf
+		'
+		'				If ymou > yca2 - 2 and ymou < yca2 + 2 Then
+		'
+		'					'o.yo = o.yo + 0.01
+		'					'o.ho = o.ho - 0.01
+		'
+		'				EndIf
+		'
+		'				If ymou > hca2 - 2 and ymou < hca2 + 2 Then
+		'
+		'					'o.ho = o.ho + 0.01
+		'
+		'				EndIf
+		'
+		'			EndIf
+		'
+		'
+		'			If o.hookx = 1 Then
+		'
+		'				'o.xo = Float(o.hookvalx) / Float(xmou)
+		'				'o.xo = Float(xmou) / Float(o.hookvalx)
+		'				'o.xo = Float(xmou - Float(o.hookvalx)) / Float(DeviceWidth)
+		'
+		'				o.xo = Float(xmou - xca) / Float(DeviceWidth)
+		'
+		'			EndIf
+		'
+		'
+		'			If lmou = 0 Then hook = 0; o.hookx = 0; o.hookw = 0
+		'
+		'
+		'		Next
+		
+		'note: UPDATE SPLITTERS
+		
+		For Local o:= EachIn blSplitter.splits
+		
+			'			Local xca1 = o.x1 '+ ScrX '+ xca
+			'			Local yca1 = o.y1 '+ ScrY '+ yca
+			'			Local xca2 = o.x2 '+ ScrX '+ xca
+			'			Local yca2 = o.y2 '+ ScrY '+ yca
+			
+			Local xca1 = GetAbsX(o.X1) + ScrX '+ xca
+			Local yca1 = GetAbsY(o.Y1) + ScrY '+ yca
+			Local xca2 = GetAbsX(o.X2) + ScrX '+ xca
+			Local yca2 = GetAbsY(o.Y2) + ScrY '+ yca
+			
+			Select o.orient
+			
+				Case 0
+			
+					If ymou >= yca1 and ymou <= yca2 and xmou > xca1 - kanchor and xmou < xca1 + kanchor Then
+			
+						o.drawon = 1
+				
+						'Print Millisecs
+						If touchhit Then
+							'If lmou Then
+												
+							o.dragging = 1
+					
+							'Select o.modespl
+				
+							'Case 1,2
+							o.dragoffset = xmou - xca1 + ScrX
+							'Case 2
+							'o.dragoffset = xmou - wca2
+							'End
+							
+							'xmou2 = xmou
+							
+							'Local limlef = 50
+							leftlimit = minsize
+						
+							Local T:= GetLeftSplitter(o)
+							
+							'If T Then Print T.X1
+							
+							If T Then leftlimit = GetAbsX(T.X1) + minsize  '; Print T.x1
+							
+							
+							rightlimit = ScrW - minsize
+							
+							T = GetRightSplitter(o)
+						
+							'If T Then Print T.X1
+							
+							If T Then rightlimit = GetAbsX(T.X1) - minsize  '; Print T.x1
+							
+							
+						EndIf
+				
+					Else
+						o.drawon = 0
+					EndIf
+			
+			
+					If o.dragging Then
+				
+						'Select o.modespl
+				
+						'Case 0
+				
+						'o.og1.xo1 = Float(xmou - o.dragoffset) / Float(DeviceWidth)
+						o.x1 = xmou - o.dragoffset '- ScrX
+						
+						
+						'If o.limleft > - 50 and o.x1 < o.limleft Then o.x1 = o.limleft
+						
+						'If o.x1 < GetAbsX(o.limleft) Then o.x1 = GetAbsX(o.limleft)
+						
+						'If o.x1 > GetAbsX(o.limright) Then o.x1 = GetAbsX(o.limright)
+						
+												
+						If o.x1 < leftlimit Then o.x1 = leftlimit  '; xmou = o.x1 + o.dragoffset
+												
+																		
+						If o.x1 > rightlimit Then o.x1 = rightlimit  '; xmou = o.x1 + o.dragoffset
+												
+												
+						o.x2 = o.x1
+						'						Local kl:Float = Float(o.x1) / Float(ScrW)
+						
+						'o.X = Float(xmou - o.dragoffset) / Float(ScrW)
+						
+						
+						'						o.X = kl ' Float(xmou - o.dragoffset) / Float(ScrW)
+
+						o.X = GetRelX(o.x1) ' Float(xmou - o.dragoffset) / Float(ScrW)
+						
+						o.X1 = GetRelX(o.x1)
+						o.X2 = GetRelX(o.x2)
+						
+						'For Local ox:= EachIn o.og2
+				
+						'	ox.xo2 = o.og1.xo1
+				
+						'Next
+				
+						'Case 1
+				
+						'						o.og1.xo2 = Float(xmou - o.dragoffset) / Float(DeviceWidth)
+						'						o.x1 = xmou
+						'
+						'						For Local ox:= EachIn o.og2
+						'
+						'							ox.xo2 = o.og1.xo2
+						'
+						'						Next
+				
+						'End
+				
+						'UpdateLimits
+						
+					EndIf
+			
+				Case 1
+					
+					If xmou >= xca1 and xmou <= xca2 and ymou > yca1 - kanchor and ymou < yca1 + kanchor Then
+			
+						o.drawon = 1
+				
+						'Print Millisecs
+						If touchhit Then
+				
+							o.dragging = 1
+					
+							'Select o.modespl
+				
+							'Case 1,2
+							o.dragoffset = ymou - yca1 + ScrY
+							'Case 2
+							'o.dragoffset = xmou - wca2
+							'End
+							'ymou2 = ymou
+				
+							toplimit = minsize
+						
+							Local T:= GetTopSplitter(o)
+						
+							If T Then toplimit = GetAbsY(T.Y1) + minsize  '; Print T.x1
+							
+							bottomlimit = ScrH - minsize
+						
+							T = GetBottomSplitter(o)
+						
+							If T Then bottomlimit = GetAbsY(T.Y1) - minsize  '; Print T.x1
+							
+							
+						EndIf
+				
+					Else
+						o.drawon = 0
+					EndIf
+			
+			
+					If o.dragging Then
+				
+						'Select o.modespl
+				
+						'Case 0
+				
+						'o.og1.xo1 = Float(xmou - o.dragoffset) / Float(DeviceWidth)
+						o.y1 = ymou - o.dragoffset '+ ScrY
+						
+						'						If o.y1 < GetAbsY(o.limtop) Then o.y1 = GetAbsY(o.limtop)
+						
+						'						If o.y1 > GetAbsY(o.limbottom) Then o.y1 = GetAbsY(o.limbottom)
+							
+						
+												
+						If o.y1 < toplimit Then o.y1 = toplimit  '; xmou = o.x1 + o.dragoffset
+												
+												
+						If o.y1 > bottomlimit Then o.y1 = bottomlimit  '; xmou = o.x1 + o.dragoffset
+						
+						o.y2 = o.y1
+						
+						
+						'Local kl:Float = Float(o.y1) / Float(ScrH)
+						
+						o.Y = GetRelY(o.y1) 'kl
+						
+						o.Y1 = GetRelY(o.y1)
+						o.Y2 = GetRelY(o.y2)
+						
+						'For Local ox:= EachIn o.og2
+				
+						'	ox.xo2 = o.og1.xo1
+				
+						'Next
+				
+						'Case 1
+				
+						'						o.og1.xo2 = Float(xmou - o.dragoffset) / Float(DeviceWidth)
+						'						o.x1 = xmou
+						'
+						'						For Local ox:= EachIn o.og2
+						'
+						'							ox.xo2 = o.og1.xo2
+						'
+						'						Next
+				
+						'End
+						'UpdateLimits
+						
+					EndIf
+					
+			End
+			
+			
+			If touchrel Then o.dragging = 0
+			
+		Next
+	
+		
+		'		If focusboxold <> focussheet.focusbox Then Print Millisecs
+		
+		If focussheet Then focusboxold = focussheet.focusbox
+		
+		
+	End
+	
+	'	Method AddSheet(x1:Float, y1:Float, x2:Float, y2:Float)
+	'
+	'		Local O:= New blSheet(x1, y1, x2, y2)
+	'		objs.AddLast O
+	'
+	'		Print "New SHEET"
+	'
+	'	End Method
+	
+	Method AddWin(x1:Float, y1:Float, x2:Float, y2:Float, co, tw, winname:String)
+	
+		Local O:= New blWin(x1, y1, x2, y2, co, tw, winname)
+		objs.AddLast O
+		
+		'Print "New WINDOW"
+	
+	End
+	
+	Method SetLAY(M)
+	
+	
+		mainscr.objs.Clear
+		
+		
+		Select M
+		
+			Case 0
+
+				mainscr.AddWin(0.15, 0, 1, 0.7, COLOR_LIGHTCORAL, 1, "")
+		
+				mainscr.AddWin(0, 0, 0.15, 1, $E0, 2, "Shortcuts")
+		
+				mainscr.AddWin(0.15, 0.7, 0.55, 1, $00C000, 3, "Output console")
+				
+				'mainscr.AddWin(0.55, 0.7, 1, 1, $C00000, 4, "Error list")
+				mainscr.AddWin(0.55, 0.7, 1, 1, $C00000, 5, "Error list")
+		
+			Case 1
+
+				mainscr.AddWin(0, 0, 0.85, 0.7, COLOR_LIGHTCORAL, 1, "")
+		
+				mainscr.AddWin(0.85, 0, 1, 1, $E0, 2, "Shortcuts")
+		
+				mainscr.AddWin(0, 0.7, 0.45, 1, $00C000, 3, "Output console")
+		
+				'mainscr.AddWin(0.45, 0.7, 0.85, 1, $C00000, 4, "Error list")
+				mainscr.AddWin(0.45, 0.7, 0.85, 1, $C00000, 5, "Error list")
+				
+		End
+
+		mainscr.CreateSplitters
+		
+	End
+	
+	'
+	'
+	'		Local tt:= objs.ToArray
+	'
+	'		Local L:= New List<blGraphic>
+	'
+	'		'Local mp:Mytextbox
+	'
+	'		'		For Local i:int = 0 To tt.Length - 1
+	'		'
+	'		'			'If tt[i].num = idmainproject Then mp = tt[i]
+	'		'			If tt[i] <> b1 Then
+	'		'
+	'		'				If tt[i] = b2 Then
+	'		'
+	'		'					If lr = 0 Then
+	'		'						L.AddLast(b1)
+	'		'						L.AddLast(b2)
+	'		'					Else
+	'		'						L.AddLast(b2)
+	'		'						L.AddLast(b1)
+	'		'					EndIf
+	'		'
+	'		'					Continue
+	'		'
+	'		'				EndIf
+	'		'
+	'		'				L.AddLast tt[i]
+	'		'
+	'		'			EndIf
+	'		'		Next
+	'
+	'
+	'		Local xx1:Float = tt[0].xo1
+	'		Local xx2:Float = tt[0].xo2
+	'		Local xx3:Float = tt[1].xo1
+	'		Local xx4:Float = tt[1].xo2
+	'
+	'
+	'		xx1 = 1 - xx1
+	'		xx4 = 1 - xx4
+	'
+	'
+	'		tt[0].xo1 = xx3
+	'		tt[0].xo2 = xx4
+	'		tt[1].xo1 = xx1
+	'		tt[1].xo2 = xx2
+	'
+	'
+	'		For Local i:int = 0 To tt.Length - 1
+	'			L.AddLast tt[i]
+	'		Next
+	'
+	'		objs = L
+	'
+	'
+	'	End
+	
+	'note: CREA SPLITTERS
+	
+	Method CreateSplitters()
+			
+		'Local xca = GetAbsX(xo1)
+		'Local yca = GetAbsY(yo1)
+		'Local wca = GetAbsX(xo2)
+		'Local hca = GetAbsY(yo2)
+				
+		'canv.DrawRect(xca, yca, wca, hca)
+				
+		'		For Local o:= EachIn objs
+		'
+		'			Local t = o.typeobj
+		'
+		'			Select t
+		'				Case 1
+		'					o.DrawSheet(canv, xca, yca, wca, hca)
+		'				Case 2
+		'					o.DrawWin(canv, xca, yca, wca, hca)
+		'			End
+		'
+		'			canv.SetColor 0.3, 0, 0
+		'
+			
+		'			canv.DrawRect(xx1 + 10, yy1 + 10, xx2 - 20, yy2 - 20)
+		'
+		'		Next
+		
+		blSplitter.splits.Clear
+		blSplitter.IDSPL = 0
+		
+		For Local o1:= EachIn objs
+		
+			Local fv = 0
+			Local fo = 0
+			
+			Local TVERT:= New blSplitter()
+			Local TORIZ:= New blSplitter()
+			TORIZ.orient = 1
+			
+			Local xx1 = 10000
+			Local xx2 = -10000
+			
+			Local yy1 = 10000
+			Local yy2 = -10000
+			
+			Local xx1a = GetAbsX(o1.xo1) '- ScrX
+			Local yy1a = GetAbsY(o1.yo1) '- ScrY
+			Local xx2a = GetAbsX(o1.xo2) '- ScrX
+			Local yy2a = GetAbsY(o1.yo2) '- ScrY
+			
+			'			xx1a = xx1a + ScrX
+			'			yy1a = yy1a + ScrY
+			'			xx2a = xx2a + ScrX
+			'			yy2a = yy2a + ScrY
+			
+			For Local o2:= EachIn objs
+				
+				If o1 <> o2 Then
+				
+					Local xx1b = GetAbsX(o2.xo1) '- ScrX
+					Local yy1b = GetAbsY(o2.yo1) '- ScrY
+					Local xx2b = GetAbsX(o2.xo2) '- ScrX
+					Local yy2b = GetAbsY(o2.yo2) '- ScrY
+				
+					'					xx1b = xx1b + ScrX
+					'					yy1b = yy1b + ScrY
+					'					xx2b = xx2b + ScrX
+					'					yy2b = yy2b + ScrY
+					
+					If yy2a >= yy1b or yy2b >= yy1a Then
+						
+						Local dfx = Abs(xx2a - xx1b)
+					
+						If dfx < 5 Then
+							
+							fv = 1
+														
+							If yy1a < yy1 Then yy1 = yy1a
+							If yy1b < yy1 Then yy1 = yy1b
+							
+							If yy2a > yy2 Then yy2 = yy2a
+							If yy2b > yy2 Then yy2 = yy2b
+														
+							o1.rightsplitter = TVERT
+							o2.leftsplitter = TVERT
+							
+						EndIf
+					
+					EndIf
+								
+					If xx2a >= xx1b or xx2b >= xx1a Then
+						
+						Local dfy = Abs(yy2a - yy1b)
+					
+						If dfy < 5 Then
+							
+							fo = 1
+														
+							If xx1a < xx1 Then xx1 = xx1a
+							If xx1b < xx1 Then xx1 = xx1b
+							
+							If xx2a > xx2 Then xx2 = xx2a
+							If xx2b > xx2 Then xx2 = xx2b
+											
+							o1.bottomsplitter = TORIZ
+							o2.topsplitter = TORIZ
+							
+						EndIf
+					
+					EndIf
+					
+				EndIf
+								
+			Next
+		
+			If fv Then
+			
+				TVERT.x1 = xx2a
+				TVERT.x2 = xx2a
+				TVERT.X = o1.xo2
+				TVERT.y1 = yy1
+				TVERT.y2 = yy2
+			
+				TVERT.X1 = GetRelX(xx2a)
+				TVERT.X2 = GetRelX(xx2a)
+				TVERT.Y1 = GetRelY(yy1)
+				TVERT.Y2 = GetRelY(yy2)
+				
+				Local T:= SplitterAlExist(TVERT)
+				
+				If T Then
+					TVERT.idspl = T.idspl
+				Else
+					TVERT.idspl = blSplitter.IDSPL
+					blSplitter.IDSPL = blSplitter.IDSPL + 1
+				EndIf
+				
+				blSplitter.splits.AddLast TVERT
+				'Print "NEW SPLITTER V"
+				'EndIf
+				
+			
+				'Print "NEW SPLITTER V"
+				
+				'				Print o1.rightsplitter.X
+				'				Print T.X
+				'Print TVERT.x1
+				'Print TVERT.y1
+				'Print TVERT.y2
+				
+				'Print ScrW + "," + ScrH
+				
+			EndIf
+		
+			If fo Then
+			
+				TORIZ.y1 = yy2a
+				TORIZ.y2 = yy2a
+				TORIZ.Y = o1.yo2
+				TORIZ.x1 = xx1
+				TORIZ.x2 = xx2
+			
+				TORIZ.X1 = GetRelX(xx1)
+				TORIZ.X2 = GetRelX(xx2)
+				TORIZ.Y1 = GetRelY(yy2a)
+				TORIZ.Y2 = GetRelY(yy2a)
+				
+				
+				'Local T:= SplitterAlExist(TORIZ)
+				
+				'If T Then
+				'If o1.bottomsplitter = Null Then o1.bottomsplitter = TORIZ
+				'If o1.topsplitter = Null Then o1.topsplitter = TORIZ
+				'Else
+				
+				Local T:= SplitterAlExist(TORIZ)
+				
+				If T Then
+					TORIZ.idspl = T.idspl
+				Else
+					TORIZ.idspl = blSplitter.IDSPL
+					blSplitter.IDSPL = blSplitter.IDSPL + 1
+				EndIf
+				
+				blSplitter.splits.AddLast TORIZ
+				'Print "NEW SPLITTER O"
+				'EndIf
+				
+				'blSplitter.splits.AddLast TORIZ
+			
+				'Print "NEW SPLITTER O"
+				
+				'				Print o1.rightsplitter.X
+				'				Print T.X
+				'Print TORIZ.x1
+				'Print TORIZ.x2
+				'Print TORIZ.y1
+				'Print TORIZ.y2
+				'Print TORIZ.y1
+				'				Print T.y2
+				
+				'Print ScrW + "," + ScrH
+				
+			EndIf
+			
+		Next
+		
+		
+		'CREA RIFERIMENTI
+		
+		For Local o1:= EachIn blSplitter.splits
+		
+			'			Local xx1a = GetAbsX(o1.x1) '- ScrX
+			'			Local yy1a = GetAbsY(o1.y1) '- ScrY
+			'			Local xx2a = GetAbsX(o1.x2) '- ScrX
+			'			Local yy2a = GetAbsY(o1.y2) '- ScrY
+			
+			Local xx1a = o1.x1 '- ScrX
+			Local yy1a = o1.y1 '- ScrY
+			Local xx2a = o1.x2 '- ScrX
+			Local yy2a = o1.y2 '- ScrY
+			
+			'			xx1a = xx1a + ScrX
+			'			yy1a = yy1a + ScrY
+			'			xx2a = xx2a + ScrX
+			'			yy2a = yy2a + ScrY
+			
+			For Local o2:= EachIn blSplitter.splits
+				
+				If o1 <> o2 Then
+				
+					'					Local xx1b = GetAbsX(o2.x1) '- ScrX
+					'					Local yy1b = GetAbsY(o2.y1) '- ScrY
+					'					Local xx2b = GetAbsX(o2.x2) '- ScrX
+					'					Local yy2b = GetAbsY(o2.y2) '- ScrY
+				
+					Local xx1b = o2.x1 '- ScrX
+					Local yy1b = o2.y1 '- ScrY
+					Local xx2b = o2.x2 '- ScrX
+					Local yy2b = o2.y2 '- ScrY
+					
+					'					xx1b = xx1b + ScrX
+					'					yy1b = yy1b + ScrY
+					'					xx2b = xx2b + ScrX
+					'					yy2b = yy2b + ScrY
+					
+					Select o1.orient
+					
+						Case 0
+						
+							If o2.orient = 1 Then
+							
+								If yy1b >= yy1a and yy2b <= yy2a Then
+								
+									Local dfx = Abs(xx1a - xx1b)
+									If dfx < 5 Then o2.leftsplitter = o1
+							
+									dfx = Abs(xx2a - xx2b)
+									If dfx < 5 Then o2.rightsplitter = o1
+								
+								EndIf
+								
+							EndIf
+						
+						Case 1
+						
+							If o2.orient = 0 Then
+							
+								If xx1b >= xx1a and xx2b <= xx2a Then
+								
+									Local dfy = Abs(yy1a - yy1b)
+									If dfy < 5 Then o2.topsplitter = o1
+							
+									dfy = Abs(yy2a - yy2b)
+									If dfy < 5 Then o2.bottomsplitter = o1
+								
+								EndIf
+								
+							EndIf
+						
+					End
+										
+				EndIf
+					
+			Next
+					
+		Next
+		
+		
+		
+						
+		
+					
+		'		For Local o1:= EachIn blSplitter.splits
+		'
+		''			If o.leftsplitter Then o.x1 = o.leftsplitter.X
+		''			If o.rightsplitter Then o.x2 = o.rightsplitter.X
+		''
+		''			If o.topsplitter Then o.y1 = o.topsplitter.Y
+		''			If o.bottomsplitter Then o.y2 = o.bottomsplitter.Y
+		'
+		'			Local xca2 = o1.x1 '+ ScrX
+		'			Local yca2 = o1.y1 '+ ScrY
+		'			Local wca2 = o1.x2 '+ ScrX
+		'			Local hca2 = o1.y2 '+ ScrY
+		'
+		'
+		'
+		'
+		'		Next
+			
+		
+		'		For Local o1:= EachIn objs
+		'
+		'			Local xx1a = xca + GetAbsX(o1.xo1)
+		'			Local yy1a = yca + GetAbsY(o1.yo1)
+		'			Local xx2a = xca + (GetAbsX(o1.xo2) - GetAbsX(o1.xo1))
+		'			Local yy2a = yca + (GetAbsY(o1.yo2) - GetAbsY(o1.yo1))
+		'
+		'			Local f = 0
+		'			Local lspl:= New List<blGraphic>
+		'
+		'			Local yy1 = 10000
+		'			Local yy2 = -10000
+		'
+		'			'If xx2a < DeviceWidth Then
+		'
+		'			For Local o2:= EachIn objs
+		'
+		'				If o1 <> o2 Then
+		'
+		'					Local xx1b = xca + GetAbsX(o2.xo1)
+		'					Local yy1b = yca + GetAbsY(o2.yo1)
+		'					Local xx2b = xca + (GetAbsX(o2.xo2) - GetAbsX(o2.xo1))
+		'					Local yy2b = yca + (GetAbsY(o2.yo2) - GetAbsY(o2.yo1))
+		'
+		'					'If xx1b > 0 Then
+		'
+		'					Local dfx = Abs(xx2a - xx1b)
+		'
+		'					If yy2a > yy1b or yy2b > yy1a Then
+		'
+		'						If dfx < 5 Then
+		'
+		'							f = 1
+		'							'New blSplitter(o1, o2, 1)
+		'
+		'							If yy1a < yy1 Then yy1 = yy1a
+		'							If yy1b < yy1 Then yy1 = yy1b
+		'
+		'							If yy2a > yy2 Then yy2 = yy2a
+		'							If yy2b > yy2 Then yy2 = yy2b
+		'
+		'							lspl.AddLast o2
+		'
+		'						EndIf
+		'					endif
+		'
+		'					'EndIf
+		'
+		'				EndIf
+		'
+		'				If f = 1 Then
+		'
+		'					New blSplitter(o1, lspl, yy1, yy2, 1)
+		'
+		'				EndIf
+		'
+		'			Next
+		'
+		'			'EndIf
+		'
+		'
+		'			f = 0
+		'
+		'			Local lspl2:= New List<blGraphic>
+		'
+		'			yy1 = 10000
+		'			yy2 = -10000
+		'
+		'			'If xx2a < DeviceWidth Then
+		'
+		'			For Local o2:= EachIn objs
+		'
+		'				If o1 <> o2 Then
+		'
+		'					Local xx1b = xca + GetAbsX(o2.xo1)
+		'					Local yy1b = yca + GetAbsY(o2.yo1)
+		'					Local xx2b = xca + (GetAbsX(o2.xo2) - GetAbsX(o2.xo1))
+		'					Local yy2b = yca + (GetAbsY(o2.yo2) - GetAbsY(o2.yo1))
+		'
+		'					'If xx1b > 0 Then
+		'
+		'					Local dfx = Abs(xx1a - xx2b)
+		'
+		'					If yy2a > yy1b or yy2b > yy1a Then
+		'
+		'						If dfx < 5 Then
+		'
+		'							f = 1
+		'
+		'							If yy1a < yy1 Then yy1 = yy1a
+		'							If yy1b < yy1 Then yy1 = yy1b
+		'
+		'							If yy2a > yy2 Then yy2 = yy2a
+		'							If yy2b > yy2 Then yy2 = yy2b
+		'
+		'							lspl2.AddLast o2
+		'
+		'						EndIf
+		'					endif
+		'
+		'					'EndIf
+		'
+		'				EndIf
+		'
+		'				If f = 1 Then
+		'
+		'					New blSplitter(o1, lspl2, yy1, yy2, 2)
+		'
+		'				EndIf
+		'
+		'			Next
+		'
+		'			'EndIf
+		'
+		'
+		'		Next
+		
+		'********
+		'UpdateLimits
+		
+		
+		
+	End Method
+	
+	'	Method UpdateLimits()
+	'
+	'		'Return
+	'
+	'		'note: CREA LIMITI
+	'
+	'		Local minlen = 80
+	'
+	'		For Local o1:= EachIn blSplitter.splits
+	'
+	'			'			Local xx1a = GetAbsX(o1.x1) '- ScrX
+	'			'			Local yy1a = GetAbsY(o1.y1) '- ScrY
+	'			'			Local xx2a = GetAbsX(o1.x2) '- ScrX
+	'			'			Local yy2a = GetAbsY(o1.y2) '- ScrY
+	'
+	'			'			Local xx1a = o1.x1 '- ScrX
+	'			'			Local yy1a = o1.y1 '- ScrY
+	'			'			Local xx2a = o1.x2 '- ScrX
+	'			'			Local yy2a = o1.y2 '- ScrY
+	'
+	'			Local xx1a = GetAbsX(o1.X1) + ScrX '+ xca
+	'			Local yy1a = GetAbsY(o1.Y1) + ScrY '+ yca
+	'			Local xx2a = GetAbsX(o1.X2) + ScrX '+ xca
+	'			Local yy2a = GetAbsY(o1.Y2) + ScrY '+ yca
+	'
+	'
+	'			'			xx1a = xx1a + ScrX
+	'			'			yy1a = yy1a + ScrY
+	'			'			xx2a = xx2a + ScrX
+	'			'			yy2a = yy2a + ScrY
+	'
+	'
+	'			Local lleft = 0 'ScrX
+	'			Local lright = ScrW
+	'			Local ltop = 0 'ScrY
+	'			Local lbottom = ScrH
+	'
+	'
+	'			For Local o2:= EachIn blSplitter.splits
+	'
+	'				If o1 <> o2 and o1.orient = o2.orient Then
+	'
+	'					'					Local xx1b = GetAbsX(o2.x1) '- ScrX
+	'					'					Local yy1b = GetAbsY(o2.y1) '- ScrY
+	'					'					Local xx2b = GetAbsX(o2.x2) '- ScrX
+	'					'					Local yy2b = GetAbsY(o2.y2) '- ScrY
+	'
+	'					'					Local xx1b = o2.x1 '- ScrX
+	'					'					Local yy1b = o2.y1 '- ScrY
+	'					'					Local xx2b = o2.x2 '- ScrX
+	'					'					Local yy2b = o2.y2 '- ScrY
+	'
+	'					Local xx1b = GetAbsX(o2.X1) + ScrX '+ xca
+	'					Local yy1b = GetAbsY(o2.Y1) + ScrY '+ yca
+	'					Local xx2b = GetAbsX(o2.X2) + ScrX '+ xca
+	'					Local yy2b = GetAbsY(o2.Y2) + ScrY '+ yca
+	'
+	'					'					xx1b = xx1b + ScrX
+	'					'					yy1b = yy1b + ScrY
+	'					'					xx2b = xx2b + ScrX
+	'					'					yy2b = yy2b + ScrY
+	'
+	'					Select o1.orient
+	'
+	'						Case 0
+	'
+	'							If yy1a < yy2b or yy1b > yy2a Then
+	'
+	'								If xx1b < xx1a and xx1b > lleft Then lleft = xx1b
+	'
+	'								If xx1b > xx1a and xx1b < lright Then lright = xx1b
+	'
+	'							EndIf
+	'
+	'						Case 1
+	'
+	'							If xx1a < xx2b or xx1b > xx2a Then
+	'
+	'								If yy1b < yy1a and yy1b > ltop Then ltop = yy1b
+	'
+	'								If yy1b > yy1a and yy1b < lbottom Then lbottom = yy1b
+	'
+	'							EndIf
+	'
+	'					End
+	'
+	'				EndIf
+	'
+	'			Next
+	'
+	'			o1.limleft = GetRelX(lleft + minlen)
+	'			o1.limright = GetRelX(lright - minlen)
+	'
+	'			o1.limtop = GetRelY(ltop + minlen)
+	'			o1.limbottom = GetRelY(lbottom - minlen)
+	'
+	'
+	'			'Print o1.limleft
+	'
+	'		Next
+	'
+	'
+	'	End
+	
+	Function SplitterAlExist:blSplitter(T:blSplitter)
+	
+		For Local o1:= EachIn blSplitter.splits
+			
+			If T.x1 = o1.x1 and T.x2 = o1.x2 and T.y1 = o1.y1 and T.y2 = o1.y2 Then Return o1
+		
+		Next
+	
+		Return Null
+		
+	End Function
+	
+	Function GetLeftSplitter:blSplitter(T:blSplitter)
+		
+		Local T2:blSplitter = Null
+		
+		Local xx = -100
+		
+		For Local o1:= EachIn blSplitter.splits
+		
+			If o1 <> T and T.idspl <> o1.idspl and o1.orient = T.orient Then
+				
+				If (GetAbsY(o1.Y2) - 1 < GetAbsY(T.Y1) or GetAbsY(o1.Y1) + 1 > GetAbsY(T.Y2)) Then
+				
+				Else
+				
+					If GetAbsX(o1.X1) < xmou and GetAbsX(o1.X1) > xx Then xx = GetAbsX(o1.X1); T2 = o1
+				
+				EndIf
+					
+			EndIf
+		Next
+		
+		Return T2
+		
+	End Function
+	
+	Function GetRightSplitter:blSplitter(T:blSplitter)
+		
+		Local T2:blSplitter = Null
+		
+		Local xx = 10000
+		
+		For Local o1:= EachIn blSplitter.splits
+		
+			If o1 <> T and T.idspl <> o1.idspl and o1.orient = T.orient Then
+				'If o1 <> T and o1.orient = T.orient Then
+				
+				If (GetAbsY(o1.Y2) - 1 < GetAbsY(T.Y1) or GetAbsY(o1.Y1) + 1 > GetAbsY(T.Y2)) Then
+				
+					'Print o1.Y2
+					
+				Else
+				
+					If GetAbsX(o1.X1) > xmou and GetAbsX(o1.X1) < xx Then xx = GetAbsX(o1.X1); T2 = o1
+				
+				EndIf
+				
+			EndIf
+		Next
+		
+		Return T2
+		
+	End Function
+	
+	Function GetTopSplitter:blSplitter(T:blSplitter)
+		
+		Local T2:blSplitter = Null
+		
+		Local yy = -100
+		
+		For Local o1:= EachIn blSplitter.splits
+		
+			If o1 <> T and T.idspl <> o1.idspl and o1.orient = T.orient Then
+				
+				If (GetAbsX(o1.X2) - 1 < GetAbsX(T.X1) or GetAbsX(o1.X1) + 1 > GetAbsX(T.X2)) Then
+				
+				Else
+				
+					If GetAbsY(o1.Y1) < ymou and GetAbsY(o1.Y1) > yy Then yy = GetAbsY(o1.Y1); T2 = o1
+				
+				EndIf
+					
+			EndIf
+		Next
+		
+		Return T2
+		
+	End Function
+	
+	Function GetBottomSplitter:blSplitter(T:blSplitter)
+		
+		Local T2:blSplitter = Null
+		
+		Local yy = 10000
+		
+		For Local o1:= EachIn blSplitter.splits
+		
+			If o1 <> T and T.idspl <> o1.idspl and o1.orient = T.orient Then
+				
+				If (GetAbsX(o1.X2) - 1 < GetAbsX(T.X1) or GetAbsX(o1.X1) + 1 > GetAbsX(T.X2)) Then
+				
+				Else
+				
+					If GetAbsY(o1.Y1) > ymou and GetAbsY(o1.Y1) < yy Then yy = GetAbsY(o1.Y1); T2 = o1
+					
+				EndIf
+				
+			EndIf
+		Next
+		
+		Return T2
+		
+	End Function
+	
+End
+
+Class blSplitter
+	
+	Global splits:= New List<blSplitter>
+
+	Global IDSPL
+	
+	Field idspl
+	
+	Field og1:blGraphic
+	Field og2:List<blGraphic>
+	
+	Field X:Float, Y:Float
+	
+	Field x1, y1, x2, y2
+	
+	Field X1:Float
+	Field Y1:Float
+	Field X2:Float
+	Field Y2:Float
+	
+	Field modespl
+	
+	Field orient '0-VERT  1-ORIZZ
+	
+	Field drawon
+	
+	Field dragging
+	Field dragoffset
+	
+	Field leftsplitter:blSplitter
+	Field rightsplitter:blSplitter
+	Field topsplitter:blSplitter
+	Field bottomsplitter:blSplitter
+	
+	Field limleft:Float = 0.05
+	Field limright:Float = 0.95
+	Field limtop:Float = 0.05
+	Field limbottom:Float = 0.95
+	
+	Method New() 'o1:blGraphic, o2:List<blGraphic>, yy1, yy2, mode)
+	
+		'		og1 = o1
+		'		og2 = o2
+		'
+		'		modespl = mode
+		'
+		'		Select mode
+		'			Case 1
+		'				x1 = GetAbsX(o1.xo1)
+		'			Case 2
+		'				x1 = GetAbsX(o1.xo1)
+		'		End
+		'
+		'
+		'		y1 = yy1
+		'		y2 = yy2
+		
+		'Select mode
+		'
+		'Case 1
+			
+		'For Local o3:= EachIn o2
+					
+				
+				
+				
+				
+		'Next
+		'
+		'				x1 = GetAbsX(o2.xo1)
+		'				x2 = x1
+		'
+		'				Local yr1a:= GetAbsY(o1.yo1)
+		'				Local yr1b:= GetAbsY(o2.yo1)
+		'
+		'				If yr1a < yr1b Then y1 = yr1a Else y1 = yr1b
+		'
+		'				Local yr2a:= GetAbsY(o1.yo2) - GetAbsY(o1.yo1)
+		'				Local yr2b:= GetAbsY(o2.yo2) - GetAbsY(o2.yo1)
+		'
+		'				If yr2a > yr2b Then y2 = yr2a Else y2 = yr2b
+		'
+		'
+		'				'y1 = GetAbsY(o2.yo1)
+		'				'y2 = GetAbsY(o2.yo2) - GetAbsY(o2.yo1)
+		'
+		'End
+			
+		'splits.AddLast Self
+	
+		'Print "CREATE SPLIT " + mode + "  -->  (" + x1 + "," + y1 + ")-(" + x2 + "," + y2 + ")"
+		
+	End Method
+
+
+End

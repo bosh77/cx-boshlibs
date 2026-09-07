@@ -1,0 +1,283 @@
+' blTheme - tabella colori dell'interfaccia, colori di sintassi, banchi tema
+' e serializzazione. Estratto da CerbIDE (cerbide.cxs + newlayout.cxs) il
+' 2026-09-03: e' dato, non logica applicativa, quindi vive nel modulo condiviso.
+' Restano in CerbIDE le funzioni legate a guiBasic2 o a scelte del progetto:
+' IdeUiSetGui, IdeUiFileNameColor, IdeUiSidePanelColor, IdeUiSolutionColor.
+
+Import mojo2
+
+
+Const THEME_BANK_STARTUP:Int = 1        ' Dark
+Global idetheme:Int = THEME_BANK_STARTUP
+Global ideUi:Int[17]
+Global themeIdeUiBank:Int[68]
+Global ideUiInited:Int = 0
+Const THEME_BANK_COUNT:Int = 4
+Const IDEUI_WIN_SEL:Int = 0
+Const IDEUI_WIN_FRAME_OUT:Int = 1
+Const IDEUI_WIN_FRAME_MID:Int = 2
+Const IDEUI_WIN_FRAME_LO:Int = 3
+Const IDEUI_WIN_INNER_BG:Int = 4
+Const IDEUI_SHEET_BG:Int = 5
+Const IDEUI_TAB_ACTIVE:Int = 6
+Const IDEUI_TAB_INACTIVE:Int = 7
+Const IDEUI_TITLE_BAR:Int = 8
+Const IDEUI_LINENUM_BG:Int = 9
+Const IDEUI_LINENUM_TEXT:Int = 10
+Const IDEUI_SEL_TEXT:Int = 11
+Const IDEUI_SCROLL_TRACK:Int = 12
+Const IDEUI_ICON_PANEL_BG:Int = 13
+Const IDEUI_MENU_BAR:Int = 14
+Const IDEUI_SIDE_PANEL_GRAD:Int = 15
+Const IDEUI_DECL_SEPARATOR:Int = 16
+Const IDEUI_COUNT:Int = 17
+Function ThemeBankClamp:Int(bank:Int)
+	If bank < 0 Or bank >= THEME_BANK_COUNT Then Return 0
+	Return bank
+End
+Function ThemeSyntaxBankOff:Int(bank:Int)
+	Return ThemeBankClamp(bank) * THEME_COLOR_SLOTS
+End
+Function ThemeIdeUiBankOff:Int(bank:Int)
+	Return ThemeBankClamp(bank) * IDEUI_COUNT
+End
+Function ThemeSyntaxInitBank:Void(bank:Int)
+	Local b:Int = ThemeBankClamp(bank)
+	Local base:Int = ThemeSyntaxBankOff(b)
+	
+	Select b
+		Case 0
+			themeSyntaxBank[base + 0] = 16777215
+			themeSyntaxBank[base + 1] = 10329501
+			themeSyntaxBank[base + 2] = 16718876
+			themeSyntaxBank[base + 3] = $ffdd99
+			themeSyntaxBank[base + 4] = $33ff33
+			themeSyntaxBank[base + 5] = 3997695
+			themeSyntaxBank[base + 6] = 57088
+			themeSyntaxBank[base + 7] = 16744448
+			themeSyntaxBank[base + 8] = $ee77ee
+			themeSyntaxBank[base + 9] = $eeee77
+			themeSyntaxBank[base + 10] = $7799ff
+		Case 1
+			themeSyntaxBank[base + 0] = 16777215
+			themeSyntaxBank[base + 1] = 8947848
+			themeSyntaxBank[base + 2] = 12040118
+			themeSyntaxBank[base + 3] = $ffcc66
+			themeSyntaxBank[base + 4] = $55bbff
+			themeSyntaxBank[base + 5] = 3997695
+			themeSyntaxBank[base + 6] = 57088
+			themeSyntaxBank[base + 7] = 16744448
+			themeSyntaxBank[base + 8] = $dd88dd
+			themeSyntaxBank[base + 9] = $dddd88
+			themeSyntaxBank[base + 10] = $88bbff
+		Case 2
+			' Light: dark syntax on pale editor (no white / very pale accents)
+			themeSyntaxBank[base + 0] = 0
+			themeSyntaxBank[base + 1] = 8388608
+			themeSyntaxBank[base + 2] = 9137184
+			themeSyntaxBank[base + 3] = 1605809
+			themeSyntaxBank[base + 4] = 0
+			themeSyntaxBank[base + 5] = 13158
+			themeSyntaxBank[base + 6] = 26112
+			themeSyntaxBank[base + 7] = 6684672
+			themeSyntaxBank[base + 8] = 7048739
+			themeSyntaxBank[base + 9] = 13158
+			themeSyntaxBank[base + 10] = 9109504
+		Default
+			For Local i:Int = 0 To THEME_SYNTAX_ACTIVE - 1
+				themeSyntaxBank[base + i] = themeSyntaxBank[i]
+			Next
+	End
+	
+	For Local i:Int = THEME_SYNTAX_ACTIVE To THEME_COLOR_SLOTS - 1
+		themeSyntaxBank[base + i] = 0
+	Next
+End
+Function ThemeSyntaxCopyBankToActive:Void(bank:Int)
+	Local base:Int = ThemeSyntaxBankOff(bank)
+	For Local i:Int = 0 To THEME_COLOR_SLOTS - 1
+		themecolor[i] = themeSyntaxBank[base + i]
+	Next
+End
+Function ThemeSyntaxCopyActiveToBank:Void(bank:Int)
+	Local base:Int = ThemeSyntaxBankOff(bank)
+	For Local i:Int = 0 To THEME_COLOR_SLOTS - 1
+		themeSyntaxBank[base + i] = themecolor[i]
+	Next
+End
+Function ThemeInitAllBanksFromCode:Void()
+	For Local b:Int = 0 To THEME_BANK_COUNT - 1
+		ThemeSyntaxInitBank b
+		IdeUiInitBank b
+	Next
+End
+Function ThemeApplyActive:Void(bank:Int)
+	idetheme = ThemeBankClamp(bank)
+	ThemeSyntaxCopyBankToActive idetheme
+	IdeUiCopyBankToActive idetheme
+End
+Function ThemeSwitchActive:Void(bank:Int)
+	bank = ThemeBankClamp(bank)
+	If bank <> idetheme Then
+		ThemeSyntaxCopyActiveToBank idetheme
+		IdeUiCopyActiveToBank idetheme
+	EndIf
+	ThemeApplyActive bank
+End
+Function IdeUiRgb:Int(r:Int, g:Int, b:Int)
+	Return (r Shl 16) | (g Shl 8) | b
+End
+Function IdeUiGetR:Int(idx:Int)
+	If idx < 0 Or idx >= IDEUI_COUNT Then Return 0
+	Return (ideUi[idx] Shr 16) & $ff
+End
+Function IdeUiGetG:Int(idx:Int)
+	If idx < 0 Or idx >= IDEUI_COUNT Then Return 0
+	Return (ideUi[idx] Shr 8) & $ff
+End
+Function IdeUiGetB:Int(idx:Int)
+	If idx < 0 Or idx >= IDEUI_COUNT Then Return 0
+	Return ideUi[idx] & $ff
+End
+Function IdeUiSetIdx:Void(idx:Int, r:Int, g:Int, b:Int)
+	If idx < 0 Or idx >= IDEUI_COUNT Then Return
+	ideUi[idx] = IdeUiRgb(r, g, b)
+End
+Function IdeUiSetCanvas:Void(canv:Canvas, idx:Int)
+	If canv = Null Then Return
+	If idx < 0 Or idx >= IDEUI_COUNT Then Return
+	canv.SetColor IdeUiGetR(idx) / 255.0, IdeUiGetG(idx) / 255.0, IdeUiGetB(idx) / 255.0
+End
+Function IdeUiSetCanvasMul:Void(canv:Canvas, idx:Int, mul:Float)
+	If canv = Null Then Return
+	If idx < 0 Or idx >= IDEUI_COUNT Then Return
+	canv.SetColor IdeUiGetR(idx) / 255.0 * mul, IdeUiGetG(idx) / 255.0 * mul, IdeUiGetB(idx) / 255.0 * mul
+End
+Function IdeUiSetBankIdx:Void(bank:Int, idx:Int, r:Int, g:Int, b:Int)
+	If idx < 0 Or idx >= IDEUI_COUNT Then Return
+	themeIdeUiBank[ThemeIdeUiBankOff(bank) + idx] = IdeUiRgb(r, g, b)
+End
+Function IdeUiInitBank:Void(bank:Int)
+	Local b:Int = ThemeBankClamp(bank)
+	
+	Select b
+		Case 0
+			IdeUiSetBankIdx b, IDEUI_WIN_SEL, 0, 204, 255
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_OUT, 178, 178, 178
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_MID, 127, 127, 127
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_LO, 76, 76, 76
+			IdeUiSetBankIdx b, IDEUI_WIN_INNER_BG, 25, 25, 25
+			IdeUiSetBankIdx b, IDEUI_SHEET_BG, 25, 25, 76
+			IdeUiSetBankIdx b, IDEUI_TAB_ACTIVE, 102, 102, 25
+			IdeUiSetBankIdx b, IDEUI_TAB_INACTIVE, 51, 76, 127
+			IdeUiSetBankIdx b, IDEUI_TITLE_BAR, 25, 127, 153
+			IdeUiSetBankIdx b, IDEUI_LINENUM_BG, 51, 128, 51
+			IdeUiSetBankIdx b, IDEUI_LINENUM_TEXT, 255, 255, 0
+			IdeUiSetBankIdx b, IDEUI_SEL_TEXT, 0, 153, 128
+			IdeUiSetBankIdx b, IDEUI_SCROLL_TRACK, 178, 178, 178
+			IdeUiSetBankIdx b, IDEUI_ICON_PANEL_BG, 55, 55, 55
+			IdeUiSetBankIdx b, IDEUI_MENU_BAR, 153, 204, 229
+			IdeUiSetBankIdx b, IDEUI_SIDE_PANEL_GRAD, 0, 192, 0
+			IdeUiSetBankIdx b, IDEUI_DECL_SEPARATOR, 148, 148, 148
+		Case 1
+			IdeUiSetBankIdx b, IDEUI_WIN_SEL, 0, 140, 220
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_OUT, 42, 52, 72
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_MID, 28, 36, 52
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_LO, 18, 24, 38
+			IdeUiSetBankIdx b, IDEUI_WIN_INNER_BG, 12, 14, 24
+			IdeUiSetBankIdx b, IDEUI_SHEET_BG, 14, 18, 38
+			IdeUiSetBankIdx b, IDEUI_TAB_ACTIVE, 48, 88, 148
+			IdeUiSetBankIdx b, IDEUI_TAB_INACTIVE, 26, 40, 68
+			IdeUiSetBankIdx b, IDEUI_TITLE_BAR, 18, 68, 108
+			IdeUiSetBankIdx b, IDEUI_LINENUM_BG, 22, 48, 42
+			IdeUiSetBankIdx b, IDEUI_LINENUM_TEXT, 175, 195, 255
+			IdeUiSetBankIdx b, IDEUI_SEL_TEXT, 0, 95, 155
+			IdeUiSetBankIdx b, IDEUI_SCROLL_TRACK, 52, 62, 82
+			IdeUiSetBankIdx b, IDEUI_ICON_PANEL_BG, 20, 26, 42
+			IdeUiSetBankIdx b, IDEUI_MENU_BAR, 16, 32, 56
+			IdeUiSetBankIdx b, IDEUI_SIDE_PANEL_GRAD, 36, 72, 132
+			IdeUiSetBankIdx b, IDEUI_DECL_SEPARATOR, 118, 138, 176
+		Case 2
+			IdeUiSetBankIdx b, IDEUI_WIN_SEL, 0, 100, 180
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_OUT, 190, 195, 205
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_MID, 175, 180, 190
+			IdeUiSetBankIdx b, IDEUI_WIN_FRAME_LO, 155, 160, 170
+			IdeUiSetBankIdx b, IDEUI_WIN_INNER_BG, 245, 246, 248
+			IdeUiSetBankIdx b, IDEUI_SHEET_BG, 228, 232, 238
+			IdeUiSetBankIdx b, IDEUI_TAB_ACTIVE, 210, 215, 225
+			IdeUiSetBankIdx b, IDEUI_TAB_INACTIVE, 195, 200, 210
+			IdeUiSetBankIdx b, IDEUI_TITLE_BAR, 205, 210, 220
+			IdeUiSetBankIdx b, IDEUI_LINENUM_BG, 220, 224, 228
+			IdeUiSetBankIdx b, IDEUI_LINENUM_TEXT, 30, 50, 100
+			IdeUiSetBankIdx b, IDEUI_SEL_TEXT, 70, 140, 200
+			IdeUiSetBankIdx b, IDEUI_SCROLL_TRACK, 190, 195, 205
+			IdeUiSetBankIdx b, IDEUI_ICON_PANEL_BG, 220, 224, 232
+			IdeUiSetBankIdx b, IDEUI_MENU_BAR, 210, 215, 225
+			IdeUiSetBankIdx b, IDEUI_SIDE_PANEL_GRAD, 80, 120, 180
+			IdeUiSetBankIdx b, IDEUI_DECL_SEPARATOR, 150, 156, 168
+		Default
+			IdeUiInitBank 0
+			Local base:Int = ThemeIdeUiBankOff(b)
+			Local base0:Int = ThemeIdeUiBankOff(0)
+			For Local i:Int = 0 To IDEUI_COUNT - 1
+				themeIdeUiBank[base + i] = themeIdeUiBank[base0 + i]
+			Next
+	End
+End
+Function IdeUiCopyBankToActive:Void(bank:Int)
+	Local base:Int = ThemeIdeUiBankOff(bank)
+	For Local i:Int = 0 To IDEUI_COUNT - 1
+		ideUi[i] = themeIdeUiBank[base + i]
+	Next
+End
+Function IdeUiCopyActiveToBank:Void(bank:Int)
+	Local base:Int = ThemeIdeUiBankOff(bank)
+	For Local i:Int = 0 To IDEUI_COUNT - 1
+		themeIdeUiBank[base + i] = ideUi[i]
+	Next
+End
+Function IdeUiSerializeBank:String(bank:Int)
+	Local base:Int = ThemeIdeUiBankOff(bank)
+	Local s:String = ""
+	For Local i:Int = 0 To IDEUI_COUNT - 1
+		If i > 0 Then s += ","
+		Local c:Int = themeIdeUiBank[base + i]
+		s += ( (c Shr 16) & $ff) + "," + ( (c Shr 8) & $ff) + "," + (c & $ff)
+	Next
+	Return s
+End
+Function IdeUiDeserializeBank:Void(bank:Int, data:String)
+	If data.Trim = "" Then Return
+	Local base:Int = ThemeIdeUiBankOff(bank)
+	Local parts:= data.Split(",")
+	Local n:Int = parts.Length
+	If n < 42 Then Return
+	Local ncols:Int = n / 3
+	If ncols > IDEUI_COUNT Then ncols = IDEUI_COUNT
+	For Local i:Int = 0 To ncols - 1
+		Local b0:Int = i * 3
+		themeIdeUiBank[base + i] = IdeUiRgb(Int(parts[b0]), Int(parts[b0 + 1]), Int(parts[b0 + 2]))
+	Next
+End
+Function IdeUiApplyPreset:Void(preset:Int)
+	ThemeSwitchActive preset
+End
+Function IdeUiInitDefaults:Void()
+	If ideUiInited = 0 Then
+		ThemeInitAllBanksFromCode
+		ThemeApplyActive THEME_BANK_STARTUP
+		ideUiInited = 1
+	EndIf
+End
+Function IdeUiSerialize:String()
+	Return IdeUiSerializeBank(idetheme)
+End
+Function IdeUiDeserialize:Void(data:String)
+	IdeUiDeserializeBank idetheme, data
+	IdeUiCopyBankToActive idetheme
+	ideUiInited = 1
+End
+Const THEME_COLOR_SLOTS:Int = 16
+Const THEME_SYNTAX_ACTIVE:Int = 11
+Global themecolor:Int[] =[16777215, 10329501, 16718876, $ffdd99, $33ff33, 3997695, 57088, 16744448, $ee77ee, $eeee77, $7799ff, 0, 0, 0, 0, 0]
+Global themeSyntaxBank:Int[64]

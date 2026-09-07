@@ -1,0 +1,933 @@
+
+' blControls - buttons, checkboxes, dropdown menus, and text fields.
+'
+' They are drawn with mojo2, not OS widgets: they sit
+' INSIDE the canvas, so they scale, move, and you can draw on top of them like
+' anything else, and they behave identically on all platforms
+' without a single line of native code.
+'
+'     Field pan:blPanel
+'     Field bt:blButton
+'
+'     ' in OnCreate
+'     pan = New blPanel()
+'     bt = pan.AddButton(20, 20, 200, 44, "Press")
+'
+'     ' in OnUpdate  (ReadTouch FIRST, as always)
+'     ReadTouch()
+'     pan.Update()
+'
+'     If bt.Clicked() Then ...
+'
+'     ' in OnRender
+'     pan.Draw(canvas)
+'
+' The panel does a little more than just keep controls in order, but it does two
+' things they couldn't do alone: it keeps a SINGLE focus among all text
+' fields, and draws the open dropdown last, which must stay on top.
+'
+' Like everything else in the library, input comes from blFuncs.ReadTouch() and
+' events trigger on RELEASE, not on press.
+
+Import mojo2
+Import blFuncs
+Import blConsts
+Import blKeyboards
+
+
+' Common appearance for all controls. They are Global and not Const so the app can
+' change the theme in one place, without touching individual controls.
+Class blControlsTheme
+
+	Global back:Int = $3A4250
+	Global backhover:Int = $4C5A70
+	Global backdown:Int = $2B3340
+	Global backoff:Int = $2E323A
+
+	Global border:Int = $7C8CA4
+	Global borderfocus:Int = $6495ED
+
+	Global text:Int = $FFFFFF
+	Global textoff:Int = $77808F
+
+	Global fieldback:Int = $F5F5F5
+	Global fieldtext:Int = $1A1A1A
+
+	Global mark:Int = $6495ED
+
+	' Text and thickness scaling. The app increases it on phones.
+	Global scale:Float = 1.0
+
+End
+
+
+'#############################################################################
+' BASE
+'#############################################################################
+
+Class blControl
+
+	Field x:Float, y:Float, w:Float, h:Float
+
+	Field visible:Bool = True
+	Field enabled:Bool = True
+
+	' filled by Update()
+	Field hover:Bool
+	Field pressed:Bool
+
+	' True for one frame only, after a release inside the control
+	Field clickpending:Bool
+
+	Field tag:String
+
+
+	Method Move:Void(xx:Float, yy:Float, ww:Float, hh:Float)
+
+		x = xx
+		y = yy
+		w = ww
+		h = hh
+
+	End
+
+
+	' True once only: asking consumes it.
+	Method Clicked:Bool()
+
+		If Not clickpending Then Return False
+
+		clickpending = False
+
+		Return True
+
+	End
+
+
+' Subclasses redefine these two. Update returns True if the
+' control took the touch, so the panel doesn't pass it to others.
+	Method Update:Bool()
+
+		Return Comune()
+
+	End
+
+	Method Draw:Void(cv:Canvas)
+
+	End
+
+
+	' Hover, pressed and click: same for all.
+	Method Comune:Bool()
+
+		hover = False
+		pressed = False
+
+		If Not visible Or Not enabled Then Return False
+
+		If IsOnRect(x, y, w, h) Then
+
+			hover = True
+
+			If ispre Then pressed = True
+
+			If touchrel Then
+
+				clickpending = True
+
+				Return True
+
+			EndIf
+
+			Return touchhit <> 0
+
+		EndIf
+
+		Return False
+
+	End
+
+
+	' Background and border, in the right state.
+	Method Sfondo:Void(cv:Canvas, focus:Bool = False)
+
+		If Not enabled Then
+			cv.SetColor blControlsTheme.backoff
+		ElseIf pressed Then
+			cv.SetColor blControlsTheme.backdown
+		ElseIf hover Then
+			cv.SetColor blControlsTheme.backhover
+		Else
+			cv.SetColor blControlsTheme.back
+		EndIf
+
+		cv.DrawRect(x, y, w, h)
+
+		If focus Then
+			cv.SetColor blControlsTheme.borderfocus
+		Else
+			cv.SetColor blControlsTheme.border
+		EndIf
+
+		Local t:Float = blControlsTheme.scale
+
+		cv.DrawRect(x, y, w, t)
+		cv.DrawRect(x, y + h - t, w, t)
+		cv.DrawRect(x, y, t, h)
+		cv.DrawRect(x + w - t, y, t, h)
+
+	End
+
+
+' mojo2 DrawText draws at fixed size: to enlarge it, scale the
+' matrix around the text.
+	Method Scritta:Void(cv:Canvas, s:String, sx:Float, sy:Float, ax:Float = 0, ay:Float = 0)
+
+		Local k:Float = blControlsTheme.scale
+
+		cv.PushMatrix()
+		cv.Translate(sx, sy)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0, ax, ay)
+		cv.PopMatrix()
+
+	End
+
+End
+
+
+'#############################################################################
+' BUTTON
+'#############################################################################
+
+Class blButton Extends blControl
+
+	Field caption:String
+
+	Method New(xx:Float, yy:Float, ww:Float, hh:Float, txt:String)
+
+		Move(xx, yy, ww, hh)
+
+		caption = txt
+
+	End
+
+	Method Draw:Void(cv:Canvas)
+
+		If Not visible Then Return
+
+		Sfondo(cv)
+
+		If enabled Then
+			cv.SetColor blControlsTheme.text
+		Else
+			cv.SetColor blControlsTheme.textoff
+		EndIf
+
+		Scritta(cv, caption, x + w / 2.0, y + h / 2.0, 0.5, 0.5)
+
+	End
+
+End
+
+
+'#############################################################################
+' CHECKBOX
+'#############################################################################
+
+Class blCheckbox Extends blControl
+
+	Field caption:String
+
+	Field checked:Bool
+
+	' True for one frame only, after the checkbox changes
+	Field togglepending:Bool
+
+
+	Method New(xx:Float, yy:Float, ww:Float, hh:Float, txt:String, ck:Bool = False)
+
+		Move(xx, yy, ww, hh)
+
+		caption = txt
+		checked = ck
+
+	End
+
+
+	Method Update:Bool()
+
+		Local preso:Bool = Comune()
+
+		If clickpending Then
+
+			clickpending = False
+
+			checked = Not checked
+			togglepending = True
+
+		EndIf
+
+		Return preso
+
+	End
+
+
+	' True once after each change.
+	Method Toggled:Bool()
+
+		If Not togglepending Then Return False
+
+		togglepending = False
+
+		Return True
+
+	End
+
+
+	Method SetChecked:Void(v:Bool)
+
+		checked = v
+
+	End
+
+
+	Method Draw:Void(cv:Canvas)
+
+		If Not visible Then Return
+
+		Local k:Float = blControlsTheme.scale
+
+		' the little square, as tall as the control minus a margin
+		Local q:Float = h - 10 * k
+
+		Local qx:Float = x + 5 * k
+		Local qy:Float = y + 5 * k
+
+		If Not enabled Then
+			cv.SetColor blControlsTheme.backoff
+		ElseIf pressed Then
+			cv.SetColor blControlsTheme.backdown
+		ElseIf hover Then
+			cv.SetColor blControlsTheme.backhover
+		Else
+			cv.SetColor blControlsTheme.back
+		EndIf
+
+		cv.DrawRect(qx, qy, q, q)
+
+		cv.SetColor blControlsTheme.border
+
+		cv.DrawRect(qx, qy, q, k)
+		cv.DrawRect(qx, qy + q - k, q, k)
+		cv.DrawRect(qx, qy, k, q)
+		cv.DrawRect(qx + q - k, qy, k, q)
+
+		' the check mark: two segments, drawn as rectangles
+		If checked Then
+
+			cv.SetColor blControlsTheme.mark
+
+			Local cx:Float = qx + q / 2.0
+			Local cy:Float = qy + q / 2.0
+			Local r:Float = q * 0.30
+
+			Segno(cv, cx - r, cy, cx - r * 0.2, cy + r * 0.7, 2.5 * k)
+			Segno(cv, cx - r * 0.2, cy + r * 0.7, cx + r, cy - r * 0.8, 2.5 * k)
+
+		EndIf
+
+		If enabled Then
+			cv.SetColor blControlsTheme.text
+		Else
+			cv.SetColor blControlsTheme.textoff
+		EndIf
+
+		Scritta(cv, caption, x + q + 14 * k, y + h / 2.0, 0, 0.5)
+
+	End
+
+
+' A thick segment, made of rectangles: DrawLine with thickness is not
+' uniform across targets.
+	Method Segno:Void(cv:Canvas, x1:Float, y1:Float, x2:Float, y2:Float, sp:Float)
+
+		Local n:Int = 12
+
+		For Local i:Int = 0 To n
+
+			Local t:Float = Float(i) / Float(n)
+
+			cv.DrawRect(x1 + (x2 - x1) * t - sp / 2.0, y1 + (y2 - y1) * t - sp / 2.0, sp, sp)
+
+		Next
+
+	End
+
+End
+
+
+'#############################################################################
+' DROPDOWN MENU
+'#############################################################################
+
+Class blDropdown Extends blControl
+
+	Field items:String[]
+
+	Field sel:Int
+
+	Field open:Bool
+
+	' true for one frame only, after a selection change
+	Field changepending:Bool
+
+	' height of one dropdown row
+	Field rowh:Float
+
+
+	Method New(xx:Float, yy:Float, ww:Float, hh:Float, voci:String[], iniz:Int = 0)
+
+		Move(xx, yy, ww, hh)
+
+		items = voci
+		sel = iniz
+		rowh = hh
+
+	End
+
+
+	Method Selected:Int()
+
+		Return sel
+
+	End
+
+	Method SelectedText:String()
+
+		If sel < 0 Or sel >= items.Length Then Return ""
+
+		Return items[sel]
+
+	End
+
+	Method SetSelected:Void(i:Int)
+
+		If i < 0 Or i >= items.Length Then Return
+
+		sel = i
+
+	End
+
+
+	' True once after each selection change.
+	Method Changed:Bool()
+
+		If Not changepending Then Return False
+
+		changepending = False
+
+		Return True
+
+	End
+
+
+	Method IsOpen:Bool()
+
+		Return open
+
+	End
+
+
+	' The open dropdown rectangle.
+	Method ListY:Float()
+
+		Return y + h
+
+	End
+
+	Method ListH:Float()
+
+		Return items.Length * rowh
+
+	End
+
+
+	Method Update:Bool()
+
+		hover = False
+		pressed = False
+
+		If Not visible Or Not enabled Then
+
+			open = False
+
+			Return False
+
+		EndIf
+
+		' --- open dropdown: takes all touch, it's modal
+		If open Then
+
+			If touchrel Then
+
+				Local ly:Float = ListY()
+
+				If IsOnRect(x, ly, w, ListH()) Then
+
+					Local i:Int = Int((ymou - ly) / rowh)
+
+					If i >= 0 And i < items.Length And i <> sel Then
+
+						sel = i
+						changepending = True
+
+					EndIf
+
+				EndIf
+
+				' any release closes the dropdown, inside or outside
+				open = False
+
+' The touch is its own: without this, the release that chooses an
+' item would also reach the command under the dropdown.
+				ConsumeTouch()
+
+				Return True
+
+			EndIf
+
+			' while it's open nothing else must react
+			If touchhit Then ConsumeTouch()
+
+			Return True
+
+		EndIf
+
+		' --- closed dropdown: behaves like a button
+		If IsOnRect(x, y, w, h) Then
+
+			hover = True
+
+			If ispre Then pressed = True
+
+			If touchrel Then
+
+				open = True
+
+				ConsumeTouch()
+
+				Return True
+
+			EndIf
+
+			Return touchhit <> 0
+
+		EndIf
+
+		Return False
+
+	End
+
+
+' Only the closed box. The open dropdown is drawn by DrawOpen, which the
+' panel calls last so it ends up on top of everything.
+	Method Draw:Void(cv:Canvas)
+
+		If Not visible Then Return
+
+		Sfondo(cv, open)
+
+		Local k:Float = blControlsTheme.scale
+
+		If enabled Then
+			cv.SetColor blControlsTheme.text
+		Else
+			cv.SetColor blControlsTheme.textoff
+		EndIf
+
+		Scritta(cv, SelectedText(), x + 10 * k, y + h / 2.0, 0, 0.5)
+
+		' the arrow tip
+		cv.SetColor blControlsTheme.border
+
+		Local fx:Float = x + w - 18 * k
+		Local fy:Float = y + h / 2.0 - 2 * k
+
+		For Local i:Int = 0 To 5
+
+			cv.DrawRect(fx + i * k, fy + i * k, (6 - i) * 2 * k, k)
+
+		Next
+
+	End
+
+
+	Method DrawOpen:Void(cv:Canvas)
+
+		If Not visible Or Not open Then Return
+
+		Local k:Float = blControlsTheme.scale
+
+		Local ly:Float = ListY()
+		Local lh:Float = ListH()
+
+		cv.SetColor blControlsTheme.back
+		cv.DrawRect(x, ly, w, lh)
+
+		For Local i:Int = 0 Until items.Length
+
+			Local ry:Float = ly + i * rowh
+
+			' the row under the pointer
+			If IsOnRect(x, ry, w, rowh) Then
+
+				cv.SetColor blControlsTheme.backhover
+				cv.DrawRect(x, ry, w, rowh)
+
+			EndIf
+
+			If i = sel Then
+
+				cv.SetColor blControlsTheme.mark
+				cv.DrawRect(x, ry, 4 * k, rowh)
+
+			EndIf
+
+			cv.SetColor blControlsTheme.text
+
+			Scritta(cv, items[i], x + 10 * k, ry + rowh / 2.0, 0, 0.5)
+
+		Next
+
+		cv.SetColor blControlsTheme.border
+
+		cv.DrawRect(x, ly, w, k)
+		cv.DrawRect(x, ly + lh - k, w, k)
+		cv.DrawRect(x, ly, k, lh)
+		cv.DrawRect(x + w - k, ly, k, lh)
+
+	End
+
+End
+
+
+'#############################################################################
+' TEXT FIELD
+'#############################################################################
+
+' Single line. On Android it opens the native blKeyboards keyboard - the
+' real one, with autocorrect and suggestions - and text arrives already composed; on
+' desktop keys are read by blFuncs.
+'
+' It's called blTextfield not blTextbox because blTextbox is already the name
+' of the code editor for IDE, which is another thing and is in blTextboxes.
+Class blTextfield Extends blControl
+
+	Field txt:String
+
+	Field focus:Bool
+
+	Field hint:String
+
+	' cursor blinking
+	Field battito:Int
+
+
+	Method New(xx:Float, yy:Float, ww:Float, hh:Float, t0:String = "", suggerimento:String = "")
+
+		Move(xx, yy, ww, hh)
+
+		txt = t0
+		hint = suggerimento
+
+	End
+
+
+	Method Text:String()
+
+		Return txt
+
+	End
+
+	Method SetText:Void(s:String)
+
+		txt = s
+
+		If focus Then blKeyboard.SetText(s)
+
+	End
+
+
+	' Called by the panel, which keeps a single focus for all.
+	Method SetFocus:Void(on:Bool)
+
+		If on = focus Then Return
+
+		focus = on
+
+		If focus Then
+
+			' keyboard starts from existing text
+			blKeyboard.SetText(txt)
+			blKeyboard.Show()
+
+		Else
+
+			blKeyboard.Hide()
+
+		EndIf
+
+	End
+
+
+	Method HasFocus:Bool()
+
+		Return focus
+
+	End
+
+
+	Method Update:Bool()
+
+		hover = False
+		pressed = False
+
+		If Not visible Or Not enabled Then Return False
+
+		battito += 1
+
+		If focus Then
+
+' text comes from blKeyboard: on Android already composed
+' by EditText, on desktop from keys read by ReadTouch
+			blKeyboard.Update()
+
+			txt = blKeyboard.Text()
+
+		EndIf
+
+		If IsOnRect(x, y, w, h) Then
+
+			hover = True
+
+			If ispre Then pressed = True
+
+			If touchrel Then
+
+				clickpending = True
+
+				Return True
+
+			EndIf
+
+			Return touchhit <> 0
+
+		EndIf
+
+		Return False
+
+	End
+
+
+	Method Draw:Void(cv:Canvas)
+
+		If Not visible Then Return
+
+		Local k:Float = blControlsTheme.scale
+
+		cv.SetColor blControlsTheme.fieldback
+		cv.DrawRect(x, y, w, h)
+
+		If focus Then
+			cv.SetColor blControlsTheme.borderfocus
+		Else
+			cv.SetColor blControlsTheme.border
+		EndIf
+
+		cv.DrawRect(x, y, w, k)
+		cv.DrawRect(x, y + h - k, w, k)
+		cv.DrawRect(x, y, k, h)
+		cv.DrawRect(x + w - k, y, k, h)
+
+		Local tx:Float = x + 10 * k
+		Local ty:Float = y + h / 2.0
+
+		If txt.Length = 0 And Not focus Then
+
+			cv.SetColor blControlsTheme.textoff
+
+			Scritta(cv, hint, tx, ty, 0, 0.5)
+
+		Else
+
+			cv.SetColor blControlsTheme.fieldtext
+
+			Scritta(cv, txt, tx, ty, 0, 0.5)
+
+		EndIf
+
+		' the cursor, only if the field has focus
+		If focus And (battito Mod 60) < 30 Then
+
+			Local f:Font = cv.Font
+
+			Local wt:Float = 0
+
+			If f <> Null Then wt = f.TextWidth(txt) * k
+
+			cv.SetColor blControlsTheme.mark
+			cv.DrawRect(tx + wt + 2 * k, y + 6 * k, 2 * k, h - 12 * k)
+
+		EndIf
+
+	End
+
+End
+
+
+'#############################################################################
+' THE PANEL
+'#############################################################################
+
+Class blPanel
+
+	Field controls:List<blControl> = New List<blControl>()
+
+
+	Method Add:blControl(c:blControl)
+
+		controls.AddLast(c)
+
+		Return c
+
+	End
+
+
+	' --- shortcuts, so the app doesn't have to name classes
+
+	Method AddButton:blButton(x:Float, y:Float, w:Float, h:Float, txt:String)
+
+		Local c:blButton = New blButton(x, y, w, h, txt)
+
+		controls.AddLast(c)
+
+		Return c
+
+	End
+
+	Method AddCheckbox:blCheckbox(x:Float, y:Float, w:Float, h:Float, txt:String, ck:Bool = False)
+
+		Local c:blCheckbox = New blCheckbox(x, y, w, h, txt, ck)
+
+		controls.AddLast(c)
+
+		Return c
+
+	End
+
+	Method AddDropdown:blDropdown(x:Float, y:Float, w:Float, h:Float, voci:String[], iniz:Int = 0)
+
+		Local c:blDropdown = New blDropdown(x, y, w, h, voci, iniz)
+
+		controls.AddLast(c)
+
+		Return c
+
+	End
+
+	Method AddTextfield:blTextfield(x:Float, y:Float, w:Float, h:Float, txt:String = "", hint:String = "")
+
+		Local c:blTextfield = New blTextfield(x, y, w, h, txt, hint)
+
+		controls.AddLast(c)
+
+		Return c
+
+	End
+
+
+' Call in OnUpdate, AFTER ReadTouch().
+'
+' Controls update in reverse draw order: what's drawn on top sees the touch
+' first, as expected.
+	Method Update:Void()
+
+' An open dropdown rules everything: it must update first,
+' otherwise a control underneath would steal its touch.
+		For Local c:blControl = EachIn controls
+
+			Local d:blDropdown = blDropdown(c)
+
+			If d <> Null And d.IsOpen() Then
+
+				d.Update()
+
+				Return
+
+			EndIf
+
+		Next
+
+		Local preso:blControl = Null
+
+		For Local c:blControl = EachIn controls
+
+			If c.Update() And preso = Null Then preso = c
+
+		Next
+
+		' --- text field focus: one at a time
+		If touchrel Then
+
+			For Local c:blControl = EachIn controls
+
+				Local t:blTextfield = blTextfield(c)
+
+				If t = Null Then Continue
+
+				t.SetFocus(t = preso)
+
+			Next
+
+		EndIf
+
+	End
+
+
+	' Call in OnRender. Open dropdowns are drawn last,
+	' so they end up on top of everything else.
+	Method Draw:Void(cv:Canvas)
+
+		For Local c:blControl = EachIn controls
+			c.Draw(cv)
+		Next
+
+		For Local c:blControl = EachIn controls
+
+			Local d:blDropdown = blDropdown(c)
+
+			If d <> Null Then d.DrawOpen(cv)
+
+		Next
+
+	End
+
+
+	' True if a dropdown is open: the app uses it so its own
+	' commands drawn under the panel don't react.
+	Method IsModal:Bool()
+
+		For Local c:blControl = EachIn controls
+
+			Local d:blDropdown = blDropdown(c)
+
+			If d <> Null And d.IsOpen() Then Return True
+
+		Next
+
+		Return False
+
+	End
+
+End

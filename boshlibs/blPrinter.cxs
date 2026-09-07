@@ -1,0 +1,667 @@
+
+' blPrinter - printing on paper, with exact measurements.
+'
+' You build a page as a list of commands, then draw it on screen for the
+' preview and/or send it to the printer:
+'
+'     Local doc:blPrintDoc = New blPrintDoc()
+'
+'     doc.AddLine(blPrint.CM(2), blPrint.CM(2), blPrint.CM(12), blPrint.CM(2), 2, COL_BLACK)
+'     doc.AddImage(blPrint.CM(2), blPrint.CM(4), "C:/path/photo.png")
+'     doc.AddText(blPrint.CM(2), blPrint.CM(10), "Hello", "Arial", 40, COL_BLACK)
+'
+'     doc.Draw(canvas, scale)     ' on-screen preview
+'     doc.Print()                 ' print
+'
+'
+' The module is called blPrinter, the class blPrint: in Cerberus the module
+' name is already an identifier, so they can't coincide. Same scheme as
+' blRequesters / blRequest.
+'
+'
+' UNIT OF MEASUREMENT
+'
+' All coordinates are in TENTHS OF A MILLIMETER. The native returns the
+' printer's pixels per centimeter and the module divides them by 100, so
+' one unit equals a hundredth of a centimeter:
+'
+'     blPrint.MM(150)   ->  15 cm
+'     blPrint.CM(10)    ->  10 cm
+'
+' These are the measurements that end up on paper: a line CM(10) long comes
+' out 10 cm long against a ruler, whatever the printer's resolution is.
+'
+'
+' WHY blDrawlist NO LONGER EXISTS
+'
+' The command classes lived in a separate module (blDrawlist) that however
+' only served printing - its only purpose was the PrinterRenderer - and
+' imported the project that used it. They've ended up here: a single module
+' that builds the page and prints it. The native rendering the text stays
+' in its own file (blPrinterText-*.cpp) so as not to mix it with the one
+' printing.
+'
+'
+' Desktop only. On Android there's no native: the classes remain, do nothing
+' and Print() returns False.
+
+
+' The common C++ includes (convertBBString) are needed by the natives and
+' must be emitted before them.
+Import blNative
+
+Import mojo2
+Import brl.databuffer
+
+
+' TARGET="glfw", not just "TARGET<>android": HOST="macos" also applies to ios
+' or html5 from a Mac, where these natives (Cocoa/GDI+/CUPS) must not be
+' imported. Found out testing blVideos on iOS.
+#If TARGET="glfw" And HOST="winnt" Then
+
+Import "native/blPrinter-win.cpp"
+Import "native/blPrinterText-win.cpp"
+
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#GLFW_GCC_LIB_OPTS+="-lgdiplus"
+#GLFW_GCC_LIB_OPTS+="-lwinspool"
+
+#EndIf
+
+
+#If TARGET="glfw" And HOST="macos" Then
+
+Import "native/blPrinter-mac.cpp"
+Import "native/blPrinterText-mac.cpp"
+
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+
+#EndIf
+
+
+#If TARGET="glfw" And HOST="linux" Then
+
+Import "native/blPrinter-linux.cpp"
+Import "native/blPrinterText-linux.cpp"
+
+' Text rendering on Linux goes through FreeType, like blFonts.
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#GLFW_GCC_CC_OPTS+="-I/usr/include/freetype2"
+#GLFW_GCC_LIB_OPTS+="-lfreetype"
+
+#EndIf
+
+
+' The condition must be the SAME as the three Imports above, i.e.
+' TARGET="glfw", not "TARGET<>android": compiling for ios or html5 from a Mac
+' or from Linux, HOST stays "macos"/"linux" and with the old condition PRINTERON
+' was turned on without any native having been imported - the _Xxx methods
+' declared in the Extern block stayed without a body.
+#If TARGET="glfw" And (HOST="winnt" Or HOST="macos" Or HOST="linux")
+#PRINTERON=True
+#Else
+#PRINTERON=False
+#EndIf
+
+
+#If PRINTERON
+
+Extern
+
+' System window to choose printer, paper size and orientation.
+Function _ShowSettings:Void() = "_ShowSettings"
+
+' "name@orientation@copies@color@paper", separated by @.
+Function _GetSettings:String() = "_GetSettings"
+
+' Opens the document and returns the printer's PIXELS PER CENTIMETER,
+' or 0 if it couldn't be opened.
+Function _StartPrintDocument:Float() = "_StartPrintDocument"
+
+Function _PrintRect(x1, y1, x2, y2, wl, rr, gg, bb, pcx:Float) = "_PrintRect"
+Function _PrintLine(x1, y1, x2, y2, wl, rr, gg, bb, pcx:Float) = "_PrintLine"
+Function _PrintImage:Void(x1:Float, y1:Float, fn:String, pcx:Float) = "_PrintImage"
+Function _PrintText:Void(x1:Float, y1:Float, buff:Int[], ww, hh, rr:Float, gg:Float, bb:Float, ksize:Float, pcx:Float) = "_PrintText"
+Function _EndPrintDocument() = "_EndPrintDocument"
+
+' Renders a text into an image: returns [width, height, pixels...].
+Function _CreateText:Int[] (txt:String, fo:String, sz) = "_CreateText"
+
+' Folder of the executable, with the trailing slash.
+Function _AppDir:String() = "_AppDir"
+
+Public
+
+#EndIf
+
+
+' Current printer settings, already split into fields: before, _GetSettings
+' returned a string with @ signs and it was up to the app to split it.
+Class blPrintSettings
+
+	Field name:String
+	Field orientation:String
+	Field copies:Int
+	Field color:String
+	Field paperSize:Int
+
+	' True if a printer has been chosen at least once.
+	Field valid:Bool
+
+End
+
+
+Class blPrint
+
+	' Pixels per drawing unit, set by blPrintDoc.Print().
+	' One unit is a tenth of a millimeter.
+	Global pixelperunit:Float
+
+	' How many drawing units a pixel of an image is worth IN THE PREVIEW.
+	'
+	' In print the measurement is decided by the native, with a formula that
+	' depends on the printer DPI and the screen one (see _PrintImage, where
+	' there's also the 1.04195435 correction measured by hand): these are
+	' values that can't be known on screen, so the preview can't compute them.
+	'
+	' It's here, isolated, on purpose: after the first trial on paper or PDF,
+	' you measure how big an image really is and fix this single number,
+	' without touching the print math.
+	Global imgunitperpixel:Float = 1.0
+
+	' Conversions to the internal unit.
+
+	Function MM:Int(mm:Float)
+
+		Return mm * 10
+
+	End
+
+	Function CM:Int(cm:Float)
+
+		Return cm * 100
+
+	End
+
+
+	' Folder where the executable lives, with the trailing slash, and its "data".
+	'
+	' They're needed for the images to print: the printer re-reads them from
+	' disk and doesn't understand "cerberus://data/" paths. They're here and
+	' not in brl.process because that module isn't implemented on Android and
+	' because boshlibs must not depend on the modules of the Cerberus
+	' installation.
+	'
+	' Outside the desktop they return "": there's no printing there.
+	Function AppDir:String()
+
+		#If PRINTERON
+		Return _AppDir()
+		#Else
+		Return ""
+		#EndIf
+
+	End
+
+
+	Function DataDir:String()
+
+		Local d:String = AppDir()
+
+		If d = "" Then Return ""
+
+		Return d + "data/"
+
+	End
+
+
+	' Opens the system window to choose printer and paper size.
+	Function ShowSettings:Void()
+
+		#If PRINTERON
+		_ShowSettings()
+		#EndIf
+
+	End
+
+
+	' The chosen settings, already split. If no printer has been chosen it
+	' returns an object with valid = False.
+	Function Settings:blPrintSettings()
+
+		Local s:blPrintSettings = New blPrintSettings()
+
+		#If PRINTERON
+
+		Local raw:String = _GetSettings()
+
+		Local p:String[] = raw.Split("@")
+
+		If p.Length >= 5 Then
+
+			s.name = p[0]
+			s.orientation = p[1]
+			s.copies = Int(p[2])
+			s.color = p[3]
+			s.paperSize = Int(p[4])
+
+			s.valid = (s.name.Trim() <> "")
+
+		EndIf
+
+		#EndIf
+
+		Return s
+
+	End
+
+
+	' Summary line ready to show on screen.
+	Function SettingsLine:String()
+
+		Local s:blPrintSettings = Settings()
+
+		If Not s.valid Then Return "no printer chosen"
+
+		Return s.name + "  -  " + s.orientation + "  -  " + s.copies + " copies  -  " + s.color
+
+	End
+
+End
+
+
+'#############################################################################
+' THE DRAWING COMMANDS
+'#############################################################################
+
+Class blPrintCmd
+
+	' On-screen preview. k = how many screen pixels one unit is worth.
+	Method Draw:Void(ca:Canvas, k:Float)
+
+	End
+
+	' On paper.
+	Method Print:Void()
+
+	End
+
+End
+
+
+Class blPrintLine Extends blPrintCmd
+
+	Field x1:Float, y1:Float
+	Field x2:Float, y2:Float
+	Field wl:Float
+	Field color:Int
+
+	Method New(xx1, yy1, xx2, yy2, spess, col)
+
+		x1 = xx1
+		y1 = yy1
+		x2 = xx2
+		y2 = yy2
+		wl = spess
+		color = col | $ff000000
+
+	End
+
+	Method Draw:Void(ca:Canvas, k:Float)
+
+		ca.SetLineWidth wl * k
+		ca.SetColor color
+		ca.DrawLine(x1 * k, y1 * k, x2 * k, y2 * k)
+
+	End
+
+	Method Print:Void()
+
+		#If PRINTERON
+
+		Local rr:Float = (color Shr 16) & 255
+		Local gg:Float = (color Shr 8) & 255
+		Local bb:Float = color & 255
+
+		_PrintLine(x1, y1, x2, y2, wl, rr, gg, bb, blPrint.pixelperunit)
+
+		#EndIf
+
+	End
+
+End
+
+
+Class blPrintRect Extends blPrintCmd
+
+	Field x1:Float, y1:Float
+	Field x2:Float, y2:Float
+	Field wl:Float
+	Field color:Int
+
+	Method New(xx1, yy1, xx2, yy2, spess, col)
+
+		x1 = xx1
+		y1 = yy1
+		x2 = xx2
+		y2 = yy2
+		wl = spess
+		color = col | $ff000000
+
+	End
+
+	Method Draw:Void(ca:Canvas, k:Float)
+
+		ca.SetLineWidth wl * k
+		ca.SetColor color
+
+		' four lines and not DrawRect: this way the preview has the same
+		' outline thickness that comes out in print
+		Local sp:Float = wl * k / 4.0
+
+		ca.DrawLine(x1 * k - sp, y1 * k, x2 * k + sp, y1 * k)
+		ca.DrawLine(x1 * k - sp, y2 * k, x2 * k + sp, y2 * k)
+		ca.DrawLine(x1 * k, y1 * k, x1 * k, y2 * k)
+		ca.DrawLine(x2 * k, y1 * k, x2 * k, y2 * k)
+
+	End
+
+	Method Print:Void()
+
+		#If PRINTERON
+
+		Local rr = (color Shr 16) & 255
+		Local gg = (color Shr 8) & 255
+		Local bb = color & 255
+
+		_PrintRect(x1, y1, x2, y2, wl, rr, gg, bb, blPrint.pixelperunit)
+
+		#EndIf
+
+	End
+
+End
+
+
+Class blPrintImage Extends blPrintCmd
+
+	Field x:Float, y:Float
+
+	' Path of the FILE on disk, not a "cerberus://data/...": the printer
+	' re-reads it on its own, outside mojo.
+	Field filenm:String
+
+	Field img:Image
+
+	Method New(xx, yy, fn:String)
+
+		x = xx
+		y = yy
+
+		' The native re-reads the file from disk: it needs a real SYSTEM
+		' path, not a "cerberus://data/...". Only the backslashes are
+		' normalized on Windows; on macOS/Linux the path already uses single
+		' slashes and doubling them would break it (CFURL/Cocoa and CUPS
+		' don't accept them).
+		#If HOST="winnt"
+			filenm = fn.Replace("\", "/").Replace("/", "//")
+		#Else
+			filenm = fn.Replace("\", "/")
+		#EndIf
+
+		' For the preview the image is loaded normally.
+		img = Image.Load(fn.Replace("\", "/"), 0, 0, 0)
+
+	End
+
+	Method Draw:Void(ca:Canvas, k:Float)
+
+		If img = Null Then
+
+			' not loaded: an empty box in its place
+			ca.SetColor $C04040
+			ca.DrawLine(x * k, y * k, (x + 400) * k, (y + 300) * k)
+			Return
+
+		EndIf
+
+		ca.SetColor $FFFFFF
+
+		' The preview scale goes through blPrint.imgunitperpixel, which is
+		' adjusted after the first print trial.
+		Local ki:Float = k * blPrint.imgunitperpixel
+
+		ca.DrawImage(img, x * k, y * k, 0, ki, ki)
+
+	End
+
+	Method Print:Void()
+
+		#If PRINTERON
+		_PrintImage(x, y, filenm, blPrint.pixelperunit)
+		#EndIf
+
+	End
+
+End
+
+
+Class blPrintText Extends blPrintCmd
+
+	Field x:Float, y:Float
+	Field text:String
+	Field font:String
+	Field size:Int
+	Field color:Int
+
+	' pixels of the text, for printing
+	Field buff:Int[]
+	Field w, h
+
+	' the same text as an image, for the preview
+	Field img:Image
+
+	Method New(xx, yy, txt:String, fo:String, sz, col)
+
+		x = xx
+		y = yy
+		text = txt
+		font = fo
+		size = sz
+		color = col | $ff000000
+
+		#If PRINTERON
+
+		Local db:Int[] = _CreateText(txt, fo, sz)
+
+		If db.Length < 3 Then Return
+
+		Local ww = db[0]
+		Local hh = db[1]
+
+		If ww < 1 Or hh < 1 Then Return
+
+		w = ww
+		h = hh
+
+		img = New Image(ww, hh, 0, 0)
+
+		Local l = ww * hh * 4
+
+		Local dd:DataBuffer = New DataBuffer(l)
+
+		Local j = 2
+
+		For Local i = 0 To l - 1 Step 4
+
+			' the native delivers the text dark on a light background: here
+			' it becomes white with alpha, so the color is decided by whoever
+			' draws
+			Local ka
+
+			If db[j] < 128 Then ka = 255 Else ka = 0
+
+			dd.PokeByte(i + 0, ka)
+			dd.PokeByte(i + 1, ka)
+			dd.PokeByte(i + 2, ka)
+			dd.PokeByte(i + 3, ka)
+
+			j = j + 4
+
+		Next
+
+		img.WritePixels(0, 0, ww, hh, dd)
+
+		Local l2 = l / 4
+
+		buff = buff.Resize(l2)
+
+		For Local i = 0 To l2 - 1
+			buff[i] = dd.PeekInt(i * 4)
+		Next
+
+		dd.Discard()
+
+		#EndIf
+
+	End
+
+	Method Draw:Void(ca:Canvas, k:Float)
+
+		If img = Null Then Return
+
+		ca.SetAlpha 1
+		ca.SetColor color
+		ca.DrawImage(img, x * k, y * k, 0, k, k)
+
+	End
+
+	Method Print:Void()
+
+		#If PRINTERON
+
+		If buff.Length = 0 Then Return
+
+		Local rr:Float = ((color Shr 16) & 255) / 255.0
+		Local gg:Float = ((color Shr 8) & 255) / 255.0
+		Local bb:Float = (color & 255) / 255.0
+
+		Local ksize:Float = 1
+
+		_PrintText(x, y, buff, w, h, rr, gg, bb, ksize, blPrint.pixelperunit)
+
+		#EndIf
+
+	End
+
+End
+
+
+'#############################################################################
+' THE PAGE
+'#############################################################################
+
+Class blPrintDoc
+
+	Field commands:List<blPrintCmd> = New List<blPrintCmd>()
+
+
+	' --- building. All coordinates in tenths of a millimeter:
+	'     use blPrint.MM() / blPrint.CM().
+
+	Method AddLine:blPrintLine(x1, y1, x2, y2, spess, col)
+
+		Local c:blPrintLine = New blPrintLine(x1, y1, x2, y2, spess, col)
+
+		commands.AddLast(c)
+
+		Return c
+
+	End
+
+	Method AddRect:blPrintRect(x1, y1, x2, y2, spess, col)
+
+		Local c:blPrintRect = New blPrintRect(x1, y1, x2, y2, spess, col)
+
+		commands.AddLast(c)
+
+		Return c
+
+	End
+
+	Method AddImage:blPrintImage(x, y, filepath:String)
+
+		Local c:blPrintImage = New blPrintImage(x, y, filepath)
+
+		commands.AddLast(c)
+
+		Return c
+
+	End
+
+	Method AddText:blPrintText(x, y, txt:String, fontname:String, size, col)
+
+		Local c:blPrintText = New blPrintText(x, y, txt, fontname, size, col)
+
+		commands.AddLast(c)
+
+		Return c
+
+	End
+
+
+	Method Clear:Void()
+
+		commands.Clear()
+
+	End
+
+	Method Count:Int()
+
+		Return commands.Count()
+
+	End
+
+
+	' --- on-screen preview. k = screen pixels per drawing unit.
+	'     With k = 0.1 an A4 sheet (2100 x 2970 units) fits in 210 x 297 pixels.
+
+	Method Draw:Void(ca:Canvas, k:Float = 0.1)
+
+		For Local c:blPrintCmd = EachIn commands
+			c.Draw(ca, k)
+		Next
+
+	End
+
+
+	' --- printing. Returns False if the printer couldn't be opened.
+
+	Method Print:Bool()
+
+		#If PRINTERON
+
+		' The native returns pixels per centimeter; divided by 100 it gives
+		' pixels per unit, i.e. per tenth of a millimeter. This division is
+		' the reason the measurements come out exact: don't touch it.
+		blPrint.pixelperunit = _StartPrintDocument() / 100.0
+
+		If blPrint.pixelperunit <= 0 Then Return False
+
+		For Local c:blPrintCmd = EachIn commands
+			c.Print()
+		Next
+
+		_EndPrintDocument()
+
+		Return True
+
+		#Else
+
+		Return False
+
+		#EndIf
+
+	End
+
+End

@@ -1,0 +1,405 @@
+
+' blMenus - native operating system menus.
+'
+'     Local m:blMenu = New blMenu("File")
+'     Local apri:blMenuItem = m.AddItem("Open...")
+'     m.AddSeparator()
+'     Local esci:blMenuItem = m.AddItem("Exit")
+'
+'     ' in OnUpdate
+'     If apri.Clicked() Then ...
+'
+' Clicked() is one-shot: it returns 1 once and then resets, so it must
+' be polled every loop in OnUpdate.
+'
+' On DESKTOP the menus end up in the bar at the top of the window: Win32 on
+' Windows, Cocoa on macOS, and on Linux - where no system bar exists -
+' the native draws it itself in X11.
+'
+' On ANDROID there's no menu bar, and Cerberus' Activity uses the
+' Theme.NoTitleBar.Fullscreen theme, so there isn't even an ActionBar with
+' the three dots. The construction is identical, but the menu only shows
+' when the app opens it:
+'
+'     If IsTouchRel(bx, by, bw, bh) Then m.ShowPopup(bx, by + bh)
+'
+' ShowPopup also exists on desktop and opens the same dropdown as a
+' popup menu, so the app code stays the same everywhere.
+'
+' Two Android limitations, not cleanly workaroundable:
+'   - item icons are ignored (Android doesn't draw them in popups);
+'   - separators disappear (android.view.Menu doesn't have them).
+
+
+' The common C++ helpers (convertBBString) are needed by the mac and linux
+' natives and must be emitted before them.
+Import blNative
+
+
+#If TARGET="android" Then
+
+Import "native/blMenus-android.java"
+
+#EndIf
+
+
+' TARGET="glfw", not just "TARGET<>android": HOST="macos" also applies when
+' compiling for ios (same host, different target) or for html5 from a Mac,
+' and those Cocoa/X11/GDI+ natives make no sense there. Found out testing
+' blVideos on iOS: "TARGET<>android" alone let TARGET="ios" through.
+#If TARGET="glfw" And HOST="winnt" Then
+
+Import "native/blMenus-win.cpp"
+
+' The natives use range-for and auto: with MinGW C++11 must be turned on
+' by hand. Menu icons come through GDI+, which MinGW doesn't link alone.
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#GLFW_GCC_LIB_OPTS+="-lgdiplus"
+
+#EndIf
+
+
+#If TARGET="glfw" And HOST="macos" Then
+
+Import "native/blMenus-mac.cpp"
+
+#EndIf
+
+
+#If TARGET="glfw" And HOST="linux" Then
+
+Import "native/blMenus-linux.cpp"
+
+' The bar is drawn by hand with the X11 natives of the glfw window.
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#GLFW_GCC_LIB_OPTS+="-lX11"
+
+#EndIf
+
+
+' The platforms that have menus. On iOS and html5 there's no native: the
+' classes stay, but they do nothing and return 0 / Null.
+
+#If TARGET="android"
+#MENUSON=True
+#ElseIf HOST="winnt" Or HOST="macos" Or HOST="linux"
+#MENUSON=True
+#Else
+#MENUSON=False
+#EndIf
+
+
+#If MENUSON
+
+Extern
+
+#If TARGET="android"
+
+' On Android the natives are static methods of a java class.
+Class BBblMenus = "BBblMenus"
+
+	Function _AddMenu:Int(title:String)
+	Function _AddSubMenu:Int(menuId:Int, title:String)
+	Function _AddMenuItem:Int(menuId:Int, title:String)
+	Function _AddMenuItemWithIcon:Int(menuId:Int, title:String, iconPath:String)
+	Function _AddMenuSeparator:Int(menuId:Int)
+	Function _MenuItemSetEnabled:Int(itemId:Int, enabled:Int)
+	Function _MenuItemSetChecked:Int(itemId:Int, checked:Int)
+	Function _MenuItemSetRadio:Int(itemId:Int, radio:Int)
+	Function _MenuItemClicked:Int(itemId:Int)
+	Function _ShowPopup:Int(menuId:Int, x:Int, y:Int)
+
+End
+
+#Else
+
+' On desktop they're free C/C++ functions.
+Function _NativeAddMenu:Int(title:String) = "_AddMenu"
+Function _NativeAddSubMenu:Int(menuId:Int, title:String) = "_AddSubMenu"
+Function _NativeAddMenuItem:Int(menuId:Int, title:String) = "_AddMenuItem"
+Function _NativeAddMenuItemWithIcon:Int(menuId:Int, title:String, iconPath:String) = "_AddMenuItemWithIcon"
+Function _NativeAddMenuSeparator:Int(menuId:Int) = "_AddMenuSeparator"
+Function _NativeMenuItemSetEnabled:Int(itemId:Int, enabled:Int) = "_MenuItemSetEnabled"
+Function _NativeMenuItemSetChecked:Int(itemId:Int, checked:Int) = "_MenuItemSetChecked"
+Function _NativeMenuItemSetRadio:Int(itemId:Int, radio:Int) = "_MenuItemSetRadio"
+Function _NativeMenuItemClicked:Int(itemId:Int) = "_MenuItemClicked"
+Function _NativeShowPopup:Int(menuId:Int, x:Int, y:Int) = "_ShowPopup"
+
+#EndIf
+
+Public
+
+#EndIf
+
+
+' The only place where the platform is checked: from here down the public
+' classes don't even have a #If. On Android the native functions are
+' methods of a class, on desktop they're free, elsewhere they don't exist.
+
+Private
+
+Class blMenuNative
+
+	Function AddMenu:Int(title:String)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._AddMenu(title)
+			#Else
+			Return _NativeAddMenu(title)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function AddSubMenu:Int(menuId:Int, title:String)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._AddSubMenu(menuId, title)
+			#Else
+			Return _NativeAddSubMenu(menuId, title)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function AddItem:Int(menuId:Int, title:String)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._AddMenuItem(menuId, title)
+			#Else
+			Return _NativeAddMenuItem(menuId, title)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function AddItemWithIcon:Int(menuId:Int, title:String, iconPath:String)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._AddMenuItemWithIcon(menuId, title, iconPath)
+			#Else
+			Return _NativeAddMenuItemWithIcon(menuId, title, iconPath)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function AddSeparator:Int(menuId:Int)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._AddMenuSeparator(menuId)
+			#Else
+			Return _NativeAddMenuSeparator(menuId)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function SetEnabled:Int(itemId:Int, enabled:Int)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._MenuItemSetEnabled(itemId, enabled)
+			#Else
+			Return _NativeMenuItemSetEnabled(itemId, enabled)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function SetChecked:Int(itemId:Int, checked:Int)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._MenuItemSetChecked(itemId, checked)
+			#Else
+			Return _NativeMenuItemSetChecked(itemId, checked)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function SetRadio:Int(itemId:Int, radio:Int)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._MenuItemSetRadio(itemId, radio)
+			#Else
+			Return _NativeMenuItemSetRadio(itemId, radio)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function Clicked:Int(itemId:Int)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._MenuItemClicked(itemId)
+			#Else
+			Return _NativeMenuItemClicked(itemId)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+	Function ShowPopup:Int(menuId:Int, x:Int, y:Int)
+		#If MENUSON
+			#If TARGET="android"
+			Return BBblMenus._ShowPopup(menuId, x, y)
+			#Else
+			Return _NativeShowPopup(menuId, x, y)
+			#EndIf
+		#Else
+			Return 0
+		#EndIf
+	End
+
+End
+
+Public
+
+
+Class blMenuItem
+
+	Field title:String
+	Field nativeId:Int
+
+	Method New(title:String, nativeId:Int)
+
+		Self.title = title
+		Self.nativeId = nativeId
+
+	End
+
+	Method SetEnabled:Int(enabled:Int)
+
+		If nativeId = 0 Then Return 0
+
+		Return blMenuNative.SetEnabled(nativeId, enabled)
+
+	End
+
+	Method SetChecked:Int(checked:Int)
+
+		If nativeId = 0 Then Return 0
+
+		Return blMenuNative.SetChecked(nativeId, checked)
+
+	End
+
+	Method SetRadio:Int(radio:Int)
+
+		If nativeId = 0 Then Return 0
+
+		Return blMenuNative.SetRadio(nativeId, radio)
+
+	End
+
+	' Returns 1 once, then resets: call it every loop.
+	Method Clicked:Int()
+
+		If nativeId = 0 Then Return 0
+
+		Return blMenuNative.Clicked(nativeId)
+
+	End
+
+End
+
+
+Class blMenu
+
+	Field title:String
+	Field nativeId:Int
+
+	Method New()
+
+	End
+
+	Method New(title:String)
+
+		AddMenu(title)
+
+	End
+
+	Method AddMenu:Int(title:String)
+
+		title = title.Trim
+
+		If title = "" Then Return 0
+
+		Self.title = title
+
+		nativeId = blMenuNative.AddMenu(title)
+
+		Return nativeId
+
+	End
+
+	Method AddSubMenu:blMenu(title:String)
+
+		title = title.Trim
+
+		If title = "" Or nativeId = 0 Then Return Null
+
+		Local subId:Int = blMenuNative.AddSubMenu(nativeId, title)
+
+		If subId = 0 Then Return Null
+
+		Local sub:blMenu = New blMenu()
+
+		sub.title = title
+		sub.nativeId = subId
+
+		Return sub
+
+	End
+
+	' iconPath: ignored on Android, which doesn't draw icons in menus.
+	Method AddItem:blMenuItem(title:String, iconPath:String = "")
+
+		title = title.Trim
+
+		If title = "" Or nativeId = 0 Then Return Null
+
+		Local itemId:Int
+
+		If iconPath.Trim <> "" Then
+			itemId = blMenuNative.AddItemWithIcon(nativeId, title, iconPath)
+		Else
+			itemId = blMenuNative.AddItem(nativeId, title)
+		EndIf
+
+		If itemId = 0 Then Return Null
+
+		Return New blMenuItem(title, itemId)
+
+	End
+
+	' On Android the separator is ignored: android.view.Menu doesn't have any.
+	Method AddSeparator:Int()
+
+		If nativeId = 0 Then Return 0
+
+		Return blMenuNative.AddSeparator(nativeId)
+
+	End
+
+	' Opens this dropdown as a popup menu at the given point, in
+	' window coordinates (the same as xmou/ymou). On Android it's the only
+	' way to show the menu; on desktop it's added to the bar.
+	Method ShowPopup:Int(x:Int, y:Int)
+
+		If nativeId = 0 Then Return 0
+
+		Return blMenuNative.ShowPopup(nativeId, x, y)
+
+	End
+
+End

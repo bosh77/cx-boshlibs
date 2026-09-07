@@ -1,0 +1,1010 @@
+
+' blRequesters - uniform asynchronous requesters on all targets.
+'
+' brl.requesters exists only on glfw and is blocking: the function returns
+' the result. On Android a dialog CANNOT block (it lives on the UI thread
+' while the game runs on the GL render thread), so the API here is split
+' into two phases on ALL targets, so the call sites stay the same everywhere:
+'
+'     ' start
+'     blRequest.AskConfirm("reload", "FILE CHANGED", msg)
+'
+'     ' later, inside OnUpdate
+'     If blRequest.Ready() = "reload" Then
+'         If blRequest.ResultInt() = 1 Then ...
+'     EndIf
+'
+' On desktop the native dialog still blocks inside AskXxx and the result is
+' already ready next loop: the flow is identical, there's no #If branch in
+' the call sites.
+'
+' The caller must call blRequest.Update() in OnUpdate and
+' blRequest.Draw(canvas) in OnRender (the color picker needs them).
+
+Import mojo2
+
+' Input is NOT read here: blFuncs.ReadTouch() reads it, once per loop.
+' Whoever uses the requesters must call it in OnUpdate before blRequest.Update().
+Import boshlibs.blFuncs
+
+' Desktop: our own native dialogs, no brl.requesters. The module must be
+' self-sufficient, so each platform has its own file in native/.
+
+#If TARGET="glfw"
+
+#If HOST="winnt"
+Import "native/blRequesters-win.cpp"
+#ElseIf HOST="linux"
+Import "native/blRequesters-linux.cpp"
+#ElseIf HOST="macos"
+Import "native/blRequesters-mac.mm"
+#EndIf
+
+Extern
+
+' Notify has no result: it just shows.
+Function _blReqNotify:Void(title:String, text:String, serious:Bool) = "_blReqNotify"
+
+' 1 = OK, 0 = Cancel
+Function _blReqConfirm:Int(title:String, text:String, serious:Bool) = "_blReqConfirm"
+
+' 1 = Yes, 0 = No, -1 = Cancel. The native does the conversion, so the
+' semantics are identical on the three platforms and no #If is needed here.
+Function _blReqProceed:Int(title:String, text:String, serious:Bool) = "_blReqProceed"
+
+' Chosen path, or "" if cancelled.
+Function _blReqFile:String(title:String, exts:String, save:Bool, path:String) = "_blReqFile"
+Function _blReqDir:String(title:String, path:String) = "_blReqDir"
+
+Public
+
+#EndIf
+
+
+#If TARGET="android"
+
+Import "native/blRequesters-android.java"
+
+Extern
+
+Class BBblRequesters
+
+	Function _Notify:Void(title:String, text:String, serious:Bool)
+	Function _Confirm:Bool(title:String, text:String, serious:Bool)
+	Function _Proceed:Bool(title:String, text:String, serious:Bool)
+	Function _OpenFile:Bool(title:String, filter:String, path:String)
+	Function _SaveFile:Bool(title:String, filter:String, path:String)
+	Function _RequestDir:Bool(title:String, path:String)
+
+	Function _IsBusy:Bool()
+	Function _IsReady:Bool()
+	Function _ResultInt:Int()
+	Function _ResultStr:String()
+	Function _Consume:Void()
+
+	Function _UriDisplayName:String(uri:String)
+	Function _UriExists:Bool(uri:String)
+	Function _UriStamp:String(uri:String)
+	Function _UriSize:Int(uri:String)
+	Function _UriTime:Int(uri:String)
+	Function _UriReadText:String(uri:String)
+	Function _UriWriteText:Bool(uri:String, text:String)
+
+End
+
+Public
+
+#EndIf
+
+
+Class blRequest
+
+	' --- state of the current request
+
+	Global rqbusy:Int
+	Global rqready:Int
+	Global rqtag:String
+	Global rqresint:Int
+	Global rqresstr:String
+
+	' --- color picker state (drawn by us on all targets)
+
+	Global colon:Int
+	Global colh:Float
+	Global cols:Float
+	Global colv:Float
+	Global coldrag:Int
+
+	Const COLDRAG_NONE:Int = 0
+	Const COLDRAG_SV:Int = 1
+	Const COLDRAG_HUE:Int = 2
+
+
+	'#########################################################################
+	' STARTING THE REQUESTS
+	'#########################################################################
+
+	' Notify is fire-and-forget on all targets: it doesn't take the slot of
+	' the current request and must not be polled with Ready().
+	Function Notify:Void(title:String, text:String, serious:Bool = False)
+
+		#If TARGET="glfw"
+
+		_blReqNotify(title, text, serious)
+
+		#ElseIf TARGET="android"
+
+		BBblRequesters._Notify(title, text, serious)
+
+		#EndIf
+
+	End Function
+
+
+	' Every AskXxx returns False if a request is already open: two
+	' overlapping dialogs would make the polling result ambiguous.
+
+	Function AskConfirm:Bool(tag:String, title:String, text:String, serious:Bool = False)
+
+		If Not Begin(tag) Then Return False
+
+		#If TARGET="glfw"
+
+		Finish(_blReqConfirm(title, text, serious), "")
+
+		#ElseIf TARGET="android"
+
+		If Not BBblRequesters._Confirm(title, text, serious) Then Finish(0, "")
+
+		#Else
+
+		Finish(0, "")
+
+		#EndIf
+
+		Return True
+
+	End Function
+
+
+	' Result: 1 = Yes, 0 = No, -1 = Cancel (Windows and macOS semantics).
+	Function AskProceed:Bool(tag:String, title:String, text:String, serious:Bool = False)
+
+		If Not Begin(tag) Then Return False
+
+		#If TARGET="glfw"
+
+		' No per-platform fixes: 1/0/-1 already arrive uniform
+		' from the three natives (on Linux it's blRequesters-linux.cpp that
+		' puts tinyfd's codes back in order, which are 0=cancel 1=yes 2=no).
+		Finish(_blReqProceed(title, text, serious), "")
+
+		#ElseIf TARGET="android"
+
+		If Not BBblRequesters._Proceed(title, text, serious) Then Finish(-1, "")
+
+		#Else
+
+		Finish(-1, "")
+
+		#EndIf
+
+		Return True
+
+	End Function
+
+
+	' On desktop ResultStr is a path; on Android it's a content:// URI with
+	' persistent permission (see UriReadText / UriWriteText).
+	Function AskOpenFile:Bool(tag:String, title:String, filter:String = "", path:String = "")
+
+		If Not Begin(tag) Then Return False
+
+		#If TARGET="glfw"
+
+		Local f:String = _blReqFile(title, filter, False, path)
+		FinishPath(f)
+
+		#ElseIf TARGET="android"
+
+		If Not BBblRequesters._OpenFile(title, filter, path) Then Finish(0, "")
+
+		#Else
+
+		Finish(0, "")
+
+		#EndIf
+
+		Return True
+
+	End Function
+
+
+	Function AskSaveFile:Bool(tag:String, title:String, filter:String = "", path:String = "")
+
+		If Not Begin(tag) Then Return False
+
+		#If TARGET="glfw"
+
+		Local f:String = _blReqFile(title, filter, True, path)
+		FinishPath(f)
+
+		#ElseIf TARGET="android"
+
+		If Not BBblRequesters._SaveFile(title, filter, path) Then Finish(0, "")
+
+		#Else
+
+		Finish(0, "")
+
+		#EndIf
+
+		Return True
+
+	End Function
+
+
+	Function AskDir:Bool(tag:String, title:String, path:String = "")
+
+		If Not Begin(tag) Then Return False
+
+		#If TARGET="glfw"
+
+		Local f:String = _blReqDir(title, path)
+		FinishPath(f)
+
+		#ElseIf TARGET="android"
+
+		If Not BBblRequesters._RequestDir(title, path) Then Finish(0, "")
+
+		#Else
+
+		Finish(0, "")
+
+		#EndIf
+
+		Return True
+
+	End Function
+
+
+	' The color picker is drawn by us on ALL targets: brl.requesters
+	' defines RequestColor only on Windows (on macOS and Linux it doesn't
+	' exist) and Android has no system dialog for colors.
+	' ResultInt is $RRGGBB, directly usable with Canvas.SetColor,
+	' or -1 if cancelled.
+	Function AskColor:Bool(tag:String, initcolor:Int = $FFFFFF)
+
+		If Not Begin(tag) Then Return False
+
+		RGBtoHSV(initcolor)
+
+		coldrag = COLDRAG_NONE
+		colon = 1
+
+		Return True
+
+	End Function
+
+
+	'#########################################################################
+	' POLLING
+	'#########################################################################
+
+	' True while the color picker is open. It's for whoever draws underneath:
+	' it's a modal panel, drawn on top of everything, so the app commands
+	' below it must neither light up nor respond.
+	Function ColorPickerOn:Bool()
+
+		Return colon <> 0
+
+	End Function
+
+
+	Function IsBusy:Bool()
+
+		Return rqbusy <> 0
+
+	End Function
+
+
+	' True if the result of the request with THIS tag is ready, and in that
+	' case it consumes it. The tag must be compared because the slot is
+	' single: if Ready() consumed any result, the first one to poll would
+	' also take the one meant for another part of the program.
+	Function Ready:Bool(tag:String)
+
+		If rqready = 0 Then Return False
+		If rqtag <> tag Then Return False
+
+		rqready = 0
+
+		Return True
+
+	End Function
+
+
+	' Tag of the ready result, without consuming it ("" if there's none).
+	' Only for those who want to dispatch from a single point.
+	Function ReadyTag:String()
+
+		If rqready = 0 Then Return ""
+
+		Return rqtag
+
+	End Function
+
+
+	Function ResultInt:Int()
+
+		Return rqresint
+
+	End Function
+
+
+	Function ResultStr:String()
+
+		Return rqresstr
+
+	End Function
+
+
+	'#########################################################################
+	' UPDATE (call in OnUpdate)
+	'#########################################################################
+
+	Function Update:Void()
+
+		#If TARGET="android"
+
+		If BBblRequesters._IsReady() Then
+
+			rqresint = BBblRequesters._ResultInt()
+			rqresstr = BBblRequesters._ResultStr()
+
+			BBblRequesters._Consume()
+
+			rqready = 1
+			rqbusy = 0
+
+		EndIf
+
+		#EndIf
+
+		If colon Then UpdateColorPicker()
+
+	End Function
+
+
+	'#########################################################################
+	' DRAWING (call in OnRender)
+	'#########################################################################
+
+	Function Draw:Void(canv:Canvas)
+
+		If colon = 0 Then Return
+
+		DrawColorPicker(canv)
+
+	End Function
+
+
+	'#########################################################################
+	' ACCESS TO THE CHOSEN FILES
+	'#########################################################################
+
+	' On Android the SAF returns content:// and os.LoadString / os.SaveString
+	' can't reach it: these go through the ContentResolver. On desktop ResultStr
+	' is a normal path, so there's nothing to do here and the caller uses
+	' the os module functions as usual.
+
+	Function IsUri:Bool(path:String)
+
+		Return path.StartsWith("content://")
+
+	End Function
+
+
+	Function UriDisplayName:String(uri:String)
+
+		#If TARGET="android"
+		Return BBblRequesters._UriDisplayName(uri)
+		#Else
+		Return ""
+		#EndIf
+
+	End Function
+
+
+	Function UriExists:Bool(uri:String)
+
+		#If TARGET="android"
+		Return BBblRequesters._UriExists(uri)
+		#Else
+		Return False
+		#EndIf
+
+	End Function
+
+
+	Function UriStamp:String(uri:String)
+
+		#If TARGET="android"
+		Return BBblRequesters._UriStamp(uri)
+		#Else
+		Return ""
+		#EndIf
+
+	End Function
+
+
+	' Size in bytes, -1 if unknown.
+	Function UriSize:Int(uri:String)
+
+		#If TARGET="android"
+		Return BBblRequesters._UriSize(uri)
+		#Else
+		Return -1
+		#EndIf
+
+	End Function
+
+
+	' Modification date in seconds (same unit as os.FileTime), -1 if unknown.
+	Function UriTime:Int(uri:String)
+
+		#If TARGET="android"
+		Return BBblRequesters._UriTime(uri)
+		#Else
+		Return -1
+		#EndIf
+
+	End Function
+
+
+	Function UriReadText:String(uri:String)
+
+		#If TARGET="android"
+		Return BBblRequesters._UriReadText(uri)
+		#Else
+		Return ""
+		#EndIf
+
+	End Function
+
+
+	Function UriWriteText:Bool(uri:String, text:String)
+
+		#If TARGET="android"
+		Return BBblRequesters._UriWriteText(uri, text)
+		#Else
+		Return False
+		#EndIf
+
+	End Function
+
+
+	'#########################################################################
+	' INTERNAL
+	'#########################################################################
+
+	Function Begin:Bool(tag:String)
+
+		If rqbusy Then Return False
+
+		rqbusy = 1
+		rqready = 0
+		rqtag = tag
+		rqresint = 0
+		rqresstr = ""
+
+		Return True
+
+	End Function
+
+
+	Function Finish:Void(resint:Int, resstr:String)
+
+		rqresint = resint
+		rqresstr = resstr
+		rqready = 1
+		rqbusy = 0
+
+	End Function
+
+
+	Function FinishPath:Void(path:String)
+
+		If path <> "" Then
+			Finish(1, path)
+		Else
+			Finish(0, "")
+		EndIf
+
+	End Function
+
+
+	'#########################################################################
+	' COLOR PICKER
+	'#########################################################################
+
+	' Geometry: saturation/value square on the left, hue bar on the
+	' right, preview below, then the two buttons. All in device coordinates,
+	' so it matches TouchX/TouchY whatever transform the caller has in effect.
+	'
+	' The measurements are computed once in LayoutColorPicker and stored
+	' in the globals below: drawing and touch-sensitive areas read the
+	' same variables, so they can't drift apart.
+
+	' Base measurements, multiplied by colzoom.
+	Const COL_PAD:Float = 14.0
+	Const COL_HUEW:Float = 30.0
+	Const COL_PREVH:Float = 34.0
+	Const COL_BTNH:Float = 46.0
+	Const COL_MAXW:Float = 440.0
+
+	' Color picker zoom: 1 = original measurements, 2 = double.
+	' On the phone the panel turned out tiny, so the default is 2.
+	Global colzoom:Float = 2.0
+
+	' Width (= side) of the selection square, set from code.
+	' 0 = automatic, derived from screen width and colzoom.
+	' Either way it's reduced if it wouldn't fit on the screen.
+	Global colsquare:Float = 0
+
+	Global colpx:Float
+	Global colpy:Float
+	Global colpw:Float
+	Global colph:Float
+	Global colss:Float
+
+	' derived geometry
+	Global colz:Float
+	Global colpad:Float
+	Global colhuew:Float
+	Global colprevh:Float
+	Global colbtnh:Float
+	Global colsx:Float
+	Global colsy:Float
+	Global colhx:Float
+	Global colhy:Float
+	Global colprevy:Float
+	Global colbty:Float
+	Global colbtw:Float
+
+
+	Function LayoutColorPicker:Void()
+
+		Local dw:Float = DeviceWidth()
+		Local dh:Float = DeviceHeight()
+
+		colz = colzoom
+		If colz < 0.25 Then colz = 0.25
+
+		colpad = COL_PAD * colz
+		colhuew = COL_HUEW * colz
+		colprevh = COL_PREVH * colz
+		colbtnh = COL_BTNH * colz
+
+		' --- side of the square
+
+		If colsquare > 0 Then
+
+			colss = colsquare
+
+		Else
+
+			Local pw:Float = dw * 0.86
+			If pw > COL_MAXW * colz Then pw = COL_MAXW * colz
+
+			colss = pw - colpad * 3 - colhuew
+
+		EndIf
+
+		' --- it must not go off the screen, neither in width nor height
+
+		Local maxw:Float = dw - 8 - colpad * 3 - colhuew
+		If colss > maxw Then colss = maxw
+
+		Local maxh:Float = dh - 8 - (colpad * 4 + colprevh + colbtnh)
+		If colss > maxh Then colss = maxh
+
+		If colss < 40 Then colss = 40
+
+		' --- the panel sizes itself around the square
+
+		colpw = colss + colpad * 3 + colhuew
+		colph = colpad + colss + colpad + colprevh + colpad + colbtnh + colpad
+
+		colpx = (dw - colpw) / 2.0
+		colpy = (dh - colph) / 2.0
+
+		colsx = colpx + colpad
+		colsy = colpy + colpad
+
+		colhx = colsx + colss + colpad
+		colhy = colsy
+
+		colprevy = colsy + colss + colpad
+
+		colbty = colprevy + colprevh + colpad
+		colbtw = (colpw - colpad * 3) / 2.0
+
+	End Function
+
+
+	Function UpdateColorPicker:Void()
+
+		LayoutColorPicker()
+
+		' Touch position and state come from ReadTouch(), not from
+		' TouchX/TouchHit: input is read by a single point in the whole library.
+		Local tx:Float = xmou
+		Local ty:Float = ymou
+
+		' --- drag start
+
+		If touchhit Then
+
+			If InRect(tx, ty, colsx, colsy, colss, colss) Then
+
+				coldrag = COLDRAG_SV
+
+			ElseIf InRect(tx, ty, colhx, colhy, colhuew, colss) Then
+
+				coldrag = COLDRAG_HUE
+
+			EndIf
+
+		EndIf
+
+		' ispre and not touchdown: touchdown starts the loop AFTER the press
+		' (it needs ispre=1 and ispre2=1), so here it would zero the drag in
+		' the same loop it just started and the color could no longer be
+		' chosen. ispre is the raw state: "the button is down".
+		If Not ispre Then coldrag = COLDRAG_NONE
+
+		' --- drag in progress: the value keeps updating even
+		'     if the finger leaves the box, otherwise on the phone the color
+		'     "sticks" as soon as you stretch one pixel off
+
+		Select coldrag
+
+			Case COLDRAG_SV
+
+				cols = Clamp01((tx - colsx) / colss)
+				colv = Clamp01(1.0 - (ty - colsy) / colss)
+
+			Case COLDRAG_HUE
+
+				colh = Clamp01((ty - colhy) / colss)
+
+		End
+
+		' --- buttons: they act on RELEASE inside the rectangle, as with
+		'     everything else in the library
+
+		If touchrel Then
+
+			If InRect(tx, ty, colpx + colpad, colbty, colbtw, colbtnh) Then
+
+				' cancel
+				colon = 0
+				coldrag = COLDRAG_NONE
+				Finish(-1, "")
+
+			ElseIf InRect(tx, ty, colpx + colpw - colpad - colbtw, colbty, colbtw, colbtnh) Then
+
+				' confirm
+				colon = 0
+				coldrag = COLDRAG_NONE
+				Finish(HSVtoRGB(colh, cols, colv), "")
+
+			EndIf
+
+		EndIf
+
+		' The picker is drawn on top of everything and behaves as modal: this
+		' loop's touch is its and its alone. Without this, the release that
+		' presses the green checkmark would also reach the button under the panel.
+		ConsumeTouch()
+
+	End Function
+
+
+	Function DrawColorPicker:Void(canv:Canvas)
+
+		LayoutColorPicker()
+
+		Local oldcol:Float[] = canv.Color
+		Local oldalpha:Float = canv.Alpha
+
+		canv.PushMatrix()
+		canv.SetMatrix(1, 0, 0, 1, 0, 0)
+
+		' --- darkened background
+
+		canv.SetAlpha 0.6
+		canv.SetColor 0, 0, 0
+		canv.DrawRect(0, 0, DeviceWidth(), DeviceHeight())
+
+		canv.SetAlpha 1
+
+		' --- panel
+
+		canv.SetColor 0.16, 0.16, 0.18
+		canv.DrawRect(colpx, colpy, colpw, colph)
+
+		canv.SetColor 0.35, 0.35, 0.38
+		DrawFrame(canv, colpx, colpy, colpw, colph, 2 * colz)
+
+		' --- saturation/value square, as cells: without a shader it's the
+		'     simplest way to get the gradient. The cell count follows the
+		'     size, otherwise enlarging the panel would show the steps.
+
+		Local cells:Int = Int(colss / 12)
+		If cells < 32 Then cells = 32
+		If cells > 64 Then cells = 64
+
+		Local cw:Float = colss / cells
+
+		For Local iy:Int = 0 To cells - 1
+
+			Local v:Float = 1.0 - (iy + 0.5) / cells
+
+			For Local ix:Int = 0 To cells - 1
+
+				Local s:Float = (ix + 0.5) / cells
+
+				canv.SetColor(HSVtoRGB(colh, s, v))
+				canv.DrawRect(colsx + ix * cw, colsy + iy * cw, cw + 1, cw + 1)
+
+			Next
+
+		Next
+
+		' --- hue bar
+
+		Local hsteps:Int = Int(colss / 8)
+		If hsteps < 48 Then hsteps = 48
+		If hsteps > 128 Then hsteps = 128
+
+		Local hh:Float = colss / hsteps
+
+		For Local i:Int = 0 To hsteps - 1
+
+			canv.SetColor(HSVtoRGB((i + 0.5) / hsteps, 1.0, 1.0))
+			canv.DrawRect(colhx, colhy + i * hh, colhuew, hh + 1)
+
+		Next
+
+		' --- cursors
+
+		Local cx:Float = colsx + cols * colss
+		Local cy:Float = colsy + (1.0 - colv) * colss
+
+		Local r1:Float = 7 * colz
+		Local r2:Float = 6 * colz
+
+		canv.SetColor 0, 0, 0
+		DrawFrame(canv, cx - r1, cy - r1, r1 * 2, r1 * 2, 3 * colz)
+		canv.SetColor 1, 1, 1
+		DrawFrame(canv, cx - r2, cy - r2, r2 * 2, r2 * 2, 1 * colz)
+
+		Local yh:Float = colhy + colh * colss
+
+		canv.SetColor 0, 0, 0
+		DrawFrame(canv, colhx - 3 * colz, yh - 5 * colz, colhuew + 6 * colz, 10 * colz, 3 * colz)
+		canv.SetColor 1, 1, 1
+		DrawFrame(canv, colhx - 2 * colz, yh - 4 * colz, colhuew + 4 * colz, 8 * colz, 1 * colz)
+
+		' --- preview
+
+		canv.SetColor(HSVtoRGB(colh, cols, colv))
+		canv.DrawRect(colpx + colpad, colprevy, colpw - colpad * 2, colprevh)
+
+		canv.SetColor 0.35, 0.35, 0.38
+		DrawFrame(canv, colpx + colpad, colprevy, colpw - colpad * 2, colprevh, 2 * colz)
+
+		' --- buttons: no text, so the module doesn't depend on a font and
+		'     no import cycle with blFonts is created
+
+		Local bx1:Float = colpx + colpad
+		Local bx2:Float = colpx + colpw - colpad - colbtw
+
+		canv.SetColor 0.55, 0.18, 0.18
+		canv.DrawRect(bx1, colbty, colbtw, colbtnh)
+		canv.SetColor 1, 1, 1
+		DrawCross(canv, bx1 + colbtw / 2.0, colbty + colbtnh / 2.0, 11 * colz, 4 * colz)
+
+		canv.SetColor 0.18, 0.5, 0.24
+		canv.DrawRect(bx2, colbty, colbtw, colbtnh)
+		canv.SetColor 1, 1, 1
+		DrawCheck(canv, bx2 + colbtw / 2.0, colbty + colbtnh / 2.0, 11 * colz, 4 * colz)
+
+		canv.PopMatrix()
+
+		canv.SetColor(oldcol[0], oldcol[1], oldcol[2])
+		canv.SetAlpha oldalpha
+
+	End Function
+
+
+	'#########################################################################
+	' DRAWING UTILITIES
+	'#########################################################################
+
+	Function DrawFrame:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float, t:Float)
+
+		canv.DrawRect(x, y, w, t)
+		canv.DrawRect(x, y + h - t, w, t)
+		canv.DrawRect(x, y, t, h)
+		canv.DrawRect(x + w - t, y, t, h)
+
+	End Function
+
+
+	' DrawLine in mojo2 is one pixel thick: on a phone it disappears, so
+	' the marks are drawn as overlapping little rectangles.
+	Function DrawThickLine:Void(canv:Canvas, x0:Float, y0:Float, x1:Float, y1:Float, t:Float)
+
+		Local steps:Int = 24
+
+		For Local i:Int = 0 To steps
+
+			Local f:Float = Float(i) / steps
+			Local x:Float = x0 + (x1 - x0) * f
+			Local y:Float = y0 + (y1 - y0) * f
+
+			canv.DrawRect(x - t / 2.0, y - t / 2.0, t, t)
+
+		Next
+
+	End Function
+
+
+	Function DrawCross:Void(canv:Canvas, cx:Float, cy:Float, r:Float, t:Float = 4)
+
+		DrawThickLine(canv, cx - r, cy - r, cx + r, cy + r, t)
+		DrawThickLine(canv, cx + r, cy - r, cx - r, cy + r, t)
+
+	End Function
+
+
+	Function DrawCheck:Void(canv:Canvas, cx:Float, cy:Float, r:Float, t:Float = 4)
+
+		DrawThickLine(canv, cx - r, cy, cx - r * 0.2, cy + r * 0.7, t)
+		DrawThickLine(canv, cx - r * 0.2, cy + r * 0.7, cx + r, cy - r * 0.8, t)
+
+	End Function
+
+
+	'#########################################################################
+	' MISCELLANEOUS UTILITIES
+	'#########################################################################
+
+	Function InRect:Bool(px:Float, py:Float, x:Float, y:Float, w:Float, h:Float)
+
+		If px < x Then Return False
+		If py < y Then Return False
+		If px > x + w Then Return False
+		If py > y + h Then Return False
+
+		Return True
+
+	End Function
+
+
+	Function Clamp01:Float(v:Float)
+
+		If v < 0 Then Return 0
+		If v > 1 Then Return 1
+
+		Return v
+
+	End Function
+
+
+	' h, s, v in 0..1 -> $RRGGBB (the same format as Canvas.SetColor)
+	Function HSVtoRGB:Int(h:Float, s:Float, v:Float)
+
+		Local r:Float = v
+		Local g:Float = v
+		Local b:Float = v
+
+		If s > 0 Then
+
+			Local hh:Float = h * 6.0
+			If hh >= 6 Then hh = 0
+
+			Local i:Int = Int(hh)
+			Local f:Float = hh - i
+
+			Local p:Float = v * (1.0 - s)
+			Local q:Float = v * (1.0 - f * s)
+			Local t:Float = v * (1.0 - (1.0 - f) * s)
+
+			Select i
+
+				Case 0
+					r = v; g = t; b = p
+				Case 1
+					r = q; g = v; b = p
+				Case 2
+					r = p; g = v; b = t
+				Case 3
+					r = p; g = q; b = v
+				Case 4
+					r = t; g = p; b = v
+				Default
+					r = v; g = p; b = q
+
+			End
+
+		EndIf
+
+		Local ri:Int = Int(r * 255 + 0.5)
+		Local gi:Int = Int(g * 255 + 0.5)
+		Local bi:Int = Int(b * 255 + 0.5)
+
+		Return (ri Shl 16) | (gi Shl 8) | bi
+
+	End Function
+
+
+	' $RRGGBB -> colh / cols / colv
+	Function RGBtoHSV:Void(rgb:Int)
+
+		If rgb < 0 Then rgb = $FFFFFF
+
+		Local r:Float = ((rgb Shr 16) & $FF) / 255.0
+		Local g:Float = ((rgb Shr 8) & $FF) / 255.0
+		Local b:Float = (rgb & $FF) / 255.0
+
+		Local mx:Float = r
+		If g > mx Then mx = g
+		If b > mx Then mx = b
+
+		Local mn:Float = r
+		If g < mn Then mn = g
+		If b < mn Then mn = b
+
+		Local d:Float = mx - mn
+
+		colv = mx
+
+		If mx > 0 Then
+			cols = d / mx
+		Else
+			cols = 0
+		EndIf
+
+		If d <= 0 Then
+
+			colh = 0
+
+		ElseIf mx = r Then
+
+			colh = ((g - b) / d) / 6.0
+
+		ElseIf mx = g Then
+
+			colh = (2.0 + (b - r) / d) / 6.0
+
+		Else
+
+			colh = (4.0 + (r - g) / d) / 6.0
+
+		EndIf
+
+		While colh < 0
+			colh = colh + 1
+		Wend
+
+		While colh > 1
+			colh = colh - 1
+		Wend
+
+	End Function
+
+End Class

@@ -1,0 +1,414 @@
+
+' blFuncs - mouse/touch reading and string utilities.
+'
+' ReadTouch() must be called once per loop at the start of OnUpdate: it fills
+' the globals below (xmou, ymou, touchhit, touchdown, ...) which IsTouchHit/
+' IsTouchDown/IsTouchRel/IsTouchRep then use.
+'
+' countdclick and dclick used to be declared in the app: now they live here,
+' the module must not depend on who uses it.
+
+Import mojo2
+
+
+' Only for blAppPathDataX() below: it's in its own #If block, not
+' shared with the rest of the module (which has no natives).
+#If TARGET="glfw" And HOST="winnt" Then
+
+Import "native/blFuncs-win.cpp"
+
+#GLFW_GCC_LIB_OPTS+="-lshell32"
+
+#EndIf
+
+#If TARGET="glfw" And HOST="macos" Then
+
+Import "native/blFuncs-mac.mm"
+
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+
+#EndIf
+
+#If TARGET="glfw" And HOST="linux" Then
+
+Import "native/blFuncs-linux.cpp"
+
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+
+#EndIf
+
+#If TARGET<>"android" And (HOST="winnt" Or HOST="macos" Or HOST="linux")
+#APPPATHDATAXON=True
+#Else
+#APPPATHDATAXON=False
+#EndIf
+
+#If APPPATHDATAXON
+
+Extern
+
+Function _AppPathDataX:String() = "_AppPathDataX"
+
+Public
+
+#EndIf
+
+
+' Keyboard reading switch. The app sets it to 0 when the focus is
+' inside one of its text fields (or while one of its modal windows is open),
+' so the keys don't also land in keypress. Before, instead of this
+' there was a list of CerbIDE windows written inside the module.
+Global readkeys:Int = 1
+
+' CR+LF line ending, handy for text files.
+Global invio:String = String.FromChar(13) + String.FromChar(10)
+
+' Double click: counter and result.
+Global countdclick, dclick
+
+Global xmou, ymou, zmou
+Global xmou2, ymou2
+Global keypress
+
+Global ispre, ispre2, ispre3
+Global ispreright
+
+'Global xmou, ymou
+'Global xmou2, ymou2
+
+Global touchhit
+Global touchdown
+Global touchrel
+Global touchrep, touchrepcounter, touchrepon
+
+
+Function ReadTouch()
+
+	'bmou1p=ispre
+	'bmou1=ispre2
+	
+	'If countdclick > 0 Then countdclick = countdclick - 1
+	'If ispre = 0 Then
+	'	If dclick > 0 Then dclick = dclick - 1
+	'EndIf
+	
+
+	ispre2 = ispre
+	'ispre = TouchDown(0)
+	
+	'bmou1 = bmou1p
+	ispre = MouseDown(MOUSE_LEFT)
+	
+	ispreright = MouseHit(MOUSE_RIGHT)
+		
+	'If bmou1p Then bmoulpress = bmoulpress + 1 Else bmoulpress = 0
+		
+	'Local bmoul
+	'Local bmou1
+	
+	ispre3 = (ispre2 = 0 And ispre <> 0)
+	
+	xmou2 = xmou
+	ymou2 = ymou
+	
+	'xmou = TouchX(0) '/ ScaleX - OffsetX
+	'ymou = TouchY(0) '/ ScaleY - OffsetY
+	
+	xmou = MouseX
+	ymou = MouseY
+	zmou = MouseZ
+	
+	If readkeys Then
+		keypress = GetChar
+	Else
+		keypress = 0
+	EndIf
+	
+	'keypress = GetChar
+	
+	'If keyboardon = 1 Then
+	'ymou = ymou - keyboffy
+	'EndIf
+		 
+	
+	'note: DOUBLE CLICK
+	
+	If countdclick > 0 Then
+	
+		countdclick = countdclick + 1
+	
+		If countdclick > 30 Then countdclick = 0; dclick = 0
+				
+	EndIf
+	
+	
+	If (ispre = 1 And ispre2 = 0) Then
+		
+		touchhit = 1
+		touchrepcounter = 1
+		touchrep = 1
+		
+		If countdclick > 2 and countdclick < 30 Then dclick = 1
+		
+		If countdclick = 0 Then countdclick = 1
+				
+	Else
+		
+		touchhit = 0
+		touchrep = 0
+		
+	Endif
+	
+	If (ispre = 1 And ispre2 = 1) Then
+	
+		touchdown = 1
+
+		If touchrepcounter > 0 and touchrepcounter < 40 Then touchrepcounter += 1
+			
+		If touchrepcounter = 40 Then touchrep = 1
+		
+	Else
+	
+		touchdown = 0
+		
+	Endif
+	
+	
+	If (ispre=0 And ispre2=1) Then
+		
+		touchrel = 1
+		touchrepcounter = 0
+		touchrep = 0
+		touchrepon = 0
+		
+	Else
+	
+		touchrel = 0
+		
+	Endif
+	
+End
+
+' Declares that this loop's touch has already been handled: it zeroes the
+' edges (hit/rel/rep) and the down state, so no one else reacts to them in
+' the same frame. It's used by whoever draws something ABOVE the rest - a
+' modal panel, a menu, blRequesters' color picker - otherwise the release
+' that closes the panel would also land on the button underneath.
+'
+' ispre/ispre2 are NOT touched: they're the raw button state and serve
+' ReadTouch next loop to compute the edges.
+Function ConsumeTouch()
+
+	touchhit = 0
+	touchdown = 0
+	touchrel = 0
+	touchrep = 0
+	ispreright = 0
+
+End
+
+
+Function IsTouchHit(x, y, w, h)
+
+	If touchhit Then Return IsOnRect(x, y, w, h)
+
+	Return 0
+
+End
+
+Function IsTouchDown(x, y, w, h)
+
+	If touchdown Then Return IsOnRect(x, y, w, h)
+
+	Return 0
+
+End
+
+Function IsTouchRel(x, y, w, h)
+
+	If touchrel Then Return IsOnRect(x, y, w, h)
+
+	Return 0
+
+End
+
+Function IsTouchRep(x, y, w, h)
+
+	If IsTouchHit(x, y, w, h) Then touchrepon = 1
+	
+	If touchrepon and touchrep Then Return IsOnRect(x, y, w, h)
+
+	Return 0
+
+End
+
+Function IsOnRect(x, y, w, h)
+	
+	If xmou >= x and xmou <= x + w and ymou >= y and ymou <= y + h Then Return 1
+
+	Return 0
+	
+End
+
+
+Function LeftString:String(s:String, c:Int)
+
+	If c <= 0 Then Return ""
+	
+	If s.Length=0 Then Return ""
+	
+	If c>s.Length Then Return s
+	
+	Local dt2:Int[]=s.ToChars()
+	Local dt3:Int[c]
+	
+	For Local i:Int=0 To c-1
+		dt3[i]=dt2[i]
+	Next
+	
+	Local retstr2:String=String.FromChars(dt3)
+	
+	Return retstr2
+	
+End
+
+Function RightString:String(s:String, c:Int)
+
+	If s.Length=0 Then Return ""
+	
+	If c>s.Length Then Return s
+	
+	Local l:Int=s.Length
+	Local dt2:Int[]=s.ToChars()
+	Local dt3:Int[c]
+
+	For Local i:Int=0 To c-1
+		dt3[i]=dt2[i+l-c]
+	Next
+
+	Local retstr2:String=String.FromChars(dt3)
+	
+	Return retstr2
+	
+End
+
+Function MidString:String(s:String, start, lun)
+	
+	Local m:String = ""
+	
+	Local ls = s.Length
+	
+	If start > ls Then Return ""
+	
+	If start < 1 Then Return ""
+	
+	For Local i = start To start + lun - 1
+		
+		If i - 1 > ls - 1 Then Return m
+		
+		m = m + String.FromChar(s[i - 1])
+		
+	Next
+	
+	Return m
+
+End
+	
+Function StringToFloat:Float(var:String)
+	
+	var = var.Replace(",", ".").Trim
+	
+	Local v = var.Find(".")
+	Local f:Float
+	
+	Local isneg:Int = 1
+	
+	If LeftString(var, 1) = "-" Then var = RightString(var, var.Length - 1); isneg = -1
+	
+	If v = -1 Then
+		
+		'Print "INT"
+	
+		Local v1:Int = Int(var)
+		f = Float(v1) * isneg
+				
+	Else
+				
+		'Print "FLOAT"
+		
+		Local l = var.Length
+		Local k0:Int = 0
+			
+		For Local i:int = l - 1 To 0 Step - 1
+			If var[i] = 46 Then Exit
+			k0 = k0 + 1
+		Next
+			
+		Local k:float = 1
+						
+		For Local j:Int = 1 To k0
+			k = k / 10
+		Next
+	
+		For Local i:int = var.Length - 1 To 0 Step - 1
+	
+			Local c = var[i] - 48
+	
+			If c = -2 Then Continue
+	
+			f = f + c * k
+		
+			k = k * 10
+		
+		Next
+		
+		f = f * isneg
+		
+	EndIf
+
+	Return f
+
+End
+
+Function IsNumber:Bool(el0:String)
+
+	If el0 >= "0" And el0 <= "9" Then Return True
+
+	Return False
+
+End Function
+Function IsLetter:Bool(el0:String)
+
+If el0 >= "A" And el0 <= "Z" Or el0 >= "a" And el0 <= "z" Then Return True
+
+Return False
+
+End Function
+
+
+' Folder for the app settings (Roaming AppData on Windows,
+' Application Support on macOS, user home on Linux), WITHOUT trailing
+' slash - same convention as brl.process.AppPathDataX, which it replaces.
+'
+' It lives here and not in brl.process because that module is not
+' implemented on Android ("Native Process class not implemented") and
+' because boshlibs must not depend on the installation modules: all the
+' code lives in the module (the same choice already made for blPrint.AppDir/DataDir).
+'
+' It's called blAppPathDataX and not AppPathDataX because an app that also
+' imports brl.process (for the Process class, not replaced here) would have
+' two same-named functions imported together: Cerberus would flag it as an
+' ambiguous identifier.
+'
+' Outside desktop it returns "".
+Function blAppPathDataX:String()
+
+	#If APPPATHDATAXON
+	Return _AppPathDataX()
+	#Else
+	Return ""
+	#EndIf
+
+End Function
+
+

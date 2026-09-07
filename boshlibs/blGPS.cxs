@@ -1,0 +1,330 @@
+
+' blGPS - the device position.
+'
+'     ' in OnCreate
+'     blPosition.Start()
+'
+'     ' in OnUpdate
+'     If blPosition.HasFix() Then
+'         mappa.SetCenter(blPosition.Lat(), blPosition.Lon())
+'     EndIf
+'
+' There's nothing to update by hand: the values arrive on their own from a
+' system listener and you read them whenever you want.
+'
+' The module is called blGPS but the class is blPosition: in Cerberus the
+' module name is already an identifier and identifiers do NOT distinguish
+' case, so a "blGps" would clash with "blGPS". Same reason why blPrinter
+' contains blPrint and blRequesters contains blRequest.
+'
+' The permission under Android is "dangerous": from API 23 on the user
+' sees it asked the first time the app calls Start(). If they say no,
+' State() returns BLGPS_DENIED and it doesn't insist anymore (Start() pops
+' the window only once). The permission is declared by this module in the
+' manifest, the app doesn't have to add anything.
+'
+' Implemented for now ONLY on Android. On desktop there's almost never a real
+' GPS receiver and the serious way would be another one (approximate position
+' from the IP address, or Windows.Devices.Geolocation): until there is one,
+' State() returns BLGPS_OFF and SetManual() remains to test the map.
+'
+' CX modules by bosh77
+
+
+#If TARGET="android"
+
+#BLGPSON=1
+
+Import "native/blGPS-android.java"
+
+' It declares them, not the app: it's the module that knows it needs them.
+#ANDROID_MANIFEST_MAIN+="<uses-permission android:name=~qandroid.permission.ACCESS_FINE_LOCATION~q />"
+#ANDROID_MANIFEST_MAIN+="<uses-permission android:name=~qandroid.permission.ACCESS_COARSE_LOCATION~q />"
+
+#EndIf
+
+
+#If BLGPSON
+
+Extern
+
+Class BBblGPS = "BBblGPS"
+
+	Function _Start:Int()
+	Function _Stop:Void()
+	Function _State:Int()
+	Function _Lat:Float()
+	Function _Lon:Float()
+	Function _Acc:Float()
+	Function _Provider:String()
+	Function _Age:Int()
+
+End
+
+Public
+
+#EndIf
+
+
+' The receiver state. Same numbers as the native.
+Const BLGPS_OFF:Int = 0
+Const BLGPS_WAITING:Int = 1
+Const BLGPS_FIX:Int = 2
+Const BLGPS_DENIED:Int = 3
+Const BLGPS_DISABLED:Int = 4
+
+
+' The only place where the platform is checked.
+
+Private
+
+Class blGpsNative
+
+	Function Start:Int()
+		#If BLGPSON
+		Return BBblGPS._Start()
+		#Else
+		Return 0
+		#EndIf
+	End
+
+	Function Stop:Void()
+		#If BLGPSON
+		BBblGPS._Stop()
+		#EndIf
+	End
+
+	Function State:Int()
+		#If BLGPSON
+		Return BBblGPS._State()
+		#Else
+		Return BLGPS_OFF
+		#EndIf
+	End
+
+	Function Lat:Float()
+		#If BLGPSON
+		Return BBblGPS._Lat()
+		#Else
+		Return 0.0
+		#EndIf
+	End
+
+	Function Lon:Float()
+		#If BLGPSON
+		Return BBblGPS._Lon()
+		#Else
+		Return 0.0
+		#EndIf
+	End
+
+	Function Acc:Float()
+		#If BLGPSON
+		Return BBblGPS._Acc()
+		#Else
+		Return 0.0
+		#EndIf
+	End
+
+	Function Provider:String()
+		#If BLGPSON
+		Return BBblGPS._Provider()
+		#Else
+		Return ""
+		#EndIf
+	End
+
+	Function Age:Int()
+		#If BLGPSON
+		Return BBblGPS._Age()
+		#Else
+		Return 0
+		#EndIf
+	End
+
+End
+
+Public
+
+
+Class blPosition
+
+	' Manual position: wins over the receiver one. It's for testing
+	' the map where there's no GPS (desktop) or it doesn't lock (indoors).
+	Global manual:Bool
+
+	Global mlat:Float
+	Global mlon:Float
+
+
+	' Turns on the receiver. On Android the first call can pop the
+	' permission request: until the user answers State() stays at
+	' BLGPS_WAITING, and calling Start() every loop doesn't hurt.
+	Function Start:Bool()
+
+		Return blGpsNative.Start() <> 0
+
+	End
+
+
+	' Turns off the receiver. Call when the map is no longer needed: an
+	' active listener drains the battery even if no one reads it.
+	Function Stop:Void()
+
+		blGpsNative.Stop()
+
+	End
+
+
+	' One of the BLGPS_*.
+	Function State:Int()
+
+		If manual Then Return BLGPS_FIX
+
+		Return blGpsNative.State()
+
+	End
+
+
+	' There's a good position to use.
+	Function HasFix:Bool()
+
+		Return State() = BLGPS_FIX
+
+	End
+
+
+	' The receiver exists on this target.
+	Function Available:Bool()
+
+		#If BLGPSON
+		Return True
+		#Else
+		Return False
+		#EndIf
+
+	End
+
+
+	Function Lat:Float()
+
+		If manual Then Return mlat
+
+		Return blGpsNative.Lat()
+
+	End
+
+
+	Function Lon:Float()
+
+		If manual Then Return mlon
+
+		Return blGpsNative.Lon()
+
+	End
+
+
+	' The uncertainty radius in METERS: the real point is inside a circle
+	' of this radius. It's the number to draw as a halo around the
+	' dot, not a detail to hide.
+	Function Accuracy:Float()
+
+		If manual Then Return 0.0
+
+		Return blGpsNative.Acc()
+
+	End
+
+
+	' "gps", "network", or "" if there's no position yet.
+	Function Source:String()
+
+		If manual Then Return "manual"
+
+		Return blGpsNative.Provider()
+
+	End
+
+
+	' How many milliseconds the position hasn't changed.
+	Function Age:Int()
+
+		If manual Then Return 0
+
+		Return blGpsNative.Age()
+
+	End
+
+
+	' Position decided by the app instead of the receiver.
+	Function SetManual:Void(lat:Float, lon:Float)
+
+		mlat = lat
+		mlon = lon
+		manual = True
+
+	End
+
+
+	' Back to the real receiver.
+	Function ClearManual:Void()
+
+		manual = False
+
+	End
+
+
+	' The state in one line, already ready to write to screen.
+	Function StateText:String()
+
+		Select State()
+
+			Case BLGPS_FIX
+
+				Local s:String = "position " + Source()
+
+				If Accuracy() > 0 Then s = s + " +/- " + Int(Accuracy()) + " m"
+
+				Return s
+
+			Case BLGPS_WAITING
+				Return "looking for position..."
+
+			Case BLGPS_DENIED
+				Return "location permission denied"
+
+			Case BLGPS_DISABLED
+				Return "position disabled in settings"
+
+		End
+
+		If Not Available() Then Return "no receiver on this target"
+
+		Return "receiver off"
+
+	End
+
+
+	' Distance in METERS between two points, on the sphere (haversine formula).
+	' With Float you lose a bit on very large distances, but under a
+	' hundred kilometers the error is less than a meter.
+	Function Distance:Float(lat1:Float, lon1:Float, lat2:Float, lon2:Float)
+
+		Const R:Float = 6371000.0
+
+		Local dlat:Float = (lat2 - lat1) * PI / 180.0
+		Local dlon:Float = (lon2 - lon1) * PI / 180.0
+
+		Local a1:Float = Sinr(dlat / 2.0)
+		Local a2:Float = Sinr(dlon / 2.0)
+
+		Local a:Float = a1 * a1 + Cosr(lat1 * PI / 180.0) * Cosr(lat2 * PI / 180.0) * a2 * a2
+
+		If a < 0.0 Then a = 0.0
+		If a > 1.0 Then a = 1.0
+
+		Return 2.0 * R * ATan2r(Sqrt(a), Sqrt(1.0 - a))
+
+	End
+
+End

@@ -1,0 +1,16 @@
+' blDoc - common base for open documents.
+' The blSheet tab bar lists open files: they can be text documents (blDocument, in blTextboxes)
+' or drawings (blDataDraw, in blDrawboxes).
+' This is the part that tabs must know in both cases, so
+' an application can keep texts and drawings open together.
+
+Import blWins
+
+
+Class blDoc
+
+	Field fullname:String
+	Field projname:String
+	Field sclist:blShortcutList
+
+End

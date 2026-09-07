@@ -1,0 +1,1424 @@
+Import blTheme
+Import blHooks
+
+
+
+Import blFuncs
+Import brl.filestream
+Import brl.filesystem
+Import brl.filepath
+Import blGraphics
+
+
+'Global bookmarks:blShortcut
+'Global labels:blShortcut
+
+Global idfocus = 1
+Global actfocusmode = 1
+
+
+Class blWin Extends blGraphic
+	
+	'Global allsheets:= New List<blSheet>
+	
+	'Field childs:= New List<blGraphic>
+	
+	
+	Method New(x1:Float, y1:Float, x2:Float, y2:Float, co, tw, wnn:String)
+	
+		Self.typeobj = 2
+		
+		Self.xo1 = x1
+		Self.yo1 = y1
+		Self.xo2 = x2
+		Self.yo2 = y2
+				
+		Self.color = co
+		
+		Self.typewin = tw
+		Self.namewin = wnn
+		
+		'allsheets.AddLast Self
+		
+		'If co = COLOR_LIGHTCORAL Then
+		'If tw = 1 Then
+			
+		'Local O:=
+		'CreateSheet(x1, y1, x2, y2)
+		'CreateSheet(0, 0, 1, 1)
+		'childs.AddLast O
+		
+		'EndIf
+		
+		Select tw
+		
+			Case 2, 5
+			
+				VSBar = New blScrollBar(0, 0, 20, 100, 0, 100, 5, 0)
+				HSBar = New blScrollBar(0, 0, 100, 20, 0, 100, 5, 1)
+			
+				'note: prova shortcuts
+				'numofshortcut = 10
+				
+				'				bookmarks = New blShortcut("Bookmarks", $ff4040)
+				'
+				'				blShortcut.allshortcuts.Last.AddShortcut("START", 2, "")
+				'				blShortcut.allshortcuts.Last.AddShortcut("Run", 5, "")
+				'				blShortcut.allshortcuts.Last.AddShortcut("Endxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 8, "")
+				'
+				'				For Local i = 0 To 20
+				'					blShortcut.allshortcuts.Last.AddShortcut("txt" + i, 18 + i, "")
+				'				Next
+				'
+				'				labels = New blShortcut("Labels", $4080f0)
+				'
+				'				blShortcut.allshortcuts.Last.AddShortcut("LoopGame - WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW", 7, "")
+				'				blShortcut.allshortcuts.Last.AddShortcut("Prova", 12, "")
+				'
+				'				For Local i = 0 To 20
+				'					blShortcut.allshortcuts.Last.AddShortcut("prova" + i, 12, "")
+				'				Next
+				'
+				'				New blShortcut("Vars", 3)
+				'				blShortcut.allshortcuts.Last.AddShortcut("WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW", 7, "")
+				'				blShortcut.allshortcuts.Last.AddShortcut("X", 12, "")
+				'
+				'				For Local i = 0 To 7
+				'					blShortcut.allshortcuts.Last.AddShortcut("Y" + i, 12, "")
+				'				Next
+				
+				'typeshortcut[0] = 0
+				'typeshortcut[1] = 1
+				'typeshortcut[2] = 2
+				'nameshortcut[0] = "Bookmarks"
+				'nameshortcut[1] = "Labels"
+				'nameshortcut[2] = "Variables"
+				
+			Case 3
+				
+				'VSBar = New blScrollBar(0, 0, 20, 100, 0, 100, 5, 0)
+				'HSBar = New blScrollBar(0, 0, 100, 20, 0, 100, 5, 1)
+				
+				consolewin = New blTextbox()
+								
+				consolewin.MakeLines
+				
+				consolewin.doc.textlocked = 1
+
+			Case 4
+				
+				'errorswin = New blTextbox()
+								
+				'errorswin.MakeLines
+				
+				'errorswin.doc.textlocked = 1
+				
+				
+		End
+		
+	End Method
+
+	Method DrawWin(canv:Canvas, x1, y1, x2, y2)
+	
+		'canv.SetColor color ' 0.5, 0.9, 0.9
+		
+		'If yo1 > 0.5 Then canv.SetColor 0.9, 0.7, 0.5
+		
+		If leftsplitter Then xo1 = leftsplitter.X
+		If rightsplitter Then xo2 = rightsplitter.X
+		
+		If topsplitter Then yo1 = topsplitter.Y
+		If bottomsplitter Then yo2 = bottomsplitter.Y
+		
+		
+		Local xca1 = GetAbsX(xo1)
+		Local yca1 = GetAbsY(yo1)
+		Local xca2 = GetAbsX(xo2) - xca1
+		Local yca2 = GetAbsY(yo2) - yca1
+		
+		
+		'canv.DrawRect(x1 + xca, y1 + yca, wca - 1, hca - 1)
+		Local kmr = 4
+		
+		IdeUiSetCanvas canv, IDEUI_WIN_FRAME_OUT
+		canv.DrawRect(x1 + xca1, y1 + yca1, xca2, yca2)
+		
+		IdeUiSetCanvas canv, IDEUI_WIN_FRAME_MID
+		IdeUiSetCanvas canv, IDEUI_WIN_INNER_BG
+		canv.DrawRect(x1 + xca1 + kmr, y1 + yca1 + kmr, xca2 - kmr * 2, yca2 - kmr * 2)
+		
+		IdeUiSetCanvas canv, IDEUI_WIN_FRAME_LO
+		
+		For Local mr = 0 To kmr
+			canv.DrawRect(x1 + xca1 + mr, y1 + yca1 + yca2 - mr, xca2 - mr, 1)
+			canv.DrawRect(x1 + xca1 + xca2 - mr, y1 + yca1 + mr, 1, yca2 - mr)
+		Next
+		If blForceCanvasFlush Then canv.Flush
+		
+		'canv.SetColor 0.8, 0.5, 0.5
+		'canv.DrawLine(x1 + xca1 + 1, y1 + yca1 + 2, x1 + xca1 + 1, y1 + yca1 + yca2 - 1)
+		
+		'DRAW CHILDS
+		
+			
+		''Else
+			
+		
+		'canv.SetColor color
+		'canv.DrawRect(x1 + xca1 + 2, y1 + yca1 + 2, xca2 - 4, 20)
+		
+		cursorvis = 0
+		
+		
+		Select typewin
+		
+			Case 1
+		
+				'note: DRAW SHEETS WIN
+				
+				'Local drawmi = 1
+				
+				idfocus = 1
+				
+				For Local o1:= EachIn blSheet.allsheets
+		
+					'o1.DrawSheet(canv, xca1, yca1, xca2, yca2)
+					o1.DrawSheet(canv, x1 + xca1, y1 + yca1, xca2, yca2)
+		
+					'If o1.childsboxes.Count > 0 Then drawmi = 0
+					
+					'drawmi = 0
+					
+				Next
+				If blForceCanvasFlush Then canv.Flush
+			
+				
+				For Local o1:= EachIn blSheetsSplitter.sheetsplits
+		
+					'o1.DrawSheet(canv, xca1, yca1, xca2, yca2)
+					o1.DrawSheetSplitter(canv, x1 + xca1, y1 + yca1, xca2, yca2)
+		
+				Next
+			
+				If boxmove Then
+			
+					Local xsm = boxmovex + xmou
+					Local ysm = boxmovey + ymou
+			
+					' La linguetta trascinata puo' essere di testo (doc) o di disegno (draw):
+					' del documento serve solo il nome, che sta nella base comune blDoc.
+					' Senza questo si leggeva doc, che in un blDrawbox e' Null, e trascinare
+					' la linguetta di un disegno faceva cadere il programma. Stesso ripiego
+					' gia' usato in blSheets.DrawSheet e UpdateSheet.
+					Local dcmove:blDoc = boxmove.doc
+					If dcmove = Null Then dcmove = boxmove.draw
+			
+					canv.SetAlpha 0.5
+			
+					IdeUiSetCanvas canv, IDEUI_WIN_SEL
+					canv.DrawRect(xsm, ysm, boxmovew, 20)
+						
+					canv.SetColor 1, 1, 1
+					canv.DrawLine(xsm, ysm, xsm + boxmovew, ysm)
+					canv.DrawLine(xsm, ysm, xsm, ysm + 20)
+					canv.DrawLine(xsm, ysm + 20, xsm + boxmovew, ysm + 20)
+					canv.DrawLine(xsm + boxmovew, ysm, xsm + boxmovew, ysm + 20)
+			
+					'For Local proj:= EachIn txtbox
+			
+					'If proj.num = sheetmove Then
+					'	 DrawStringNew(xfont2, proj.projname, xsm + 14, ysm, 128)
+					'xs + xx + 7 + xoffbox, ys + 2
+					If dcmove <> Null Then font1.DrawText(canv, dcmove.projname, xsm + boxtextx, ysm + 4, IdeUiFileNameColor(), 4, 1)
+					'Next
+			
+					canv.SetAlpha 1
+			
+					'					If touchdown = 0 or touchrel = 1 Then
+									
+					'sposta box stesso sheet
+					'Print boxmoveon.doc.projname
+					'Print boxmovelr
+					
+					If boxmoveon and boxmoveon <> boxmove Then
+					
+						focussheet.MoveIntoSheet(boxmove, boxmoveon, boxmovelr)
+						'							boxmove = Null
+						
+						'End
+					Else
+					
+						'sposta box altro sheet
+						If touchdown = 0 or touchrel = 1 Then
+						
+							For Local o1:= EachIn blSheet.allsheets
+						
+								If o1 <> focussheet
+									Local ion = o1.IsOnSheet(x1 + xca1, y1 + yca1, xca2, yca2)
+		
+									If ion Then
+															
+										focussheet.childsboxes.Remove(boxmove)
+								
+										If not focussheet.childsboxes.IsEmpty Then
+											focussheet.focusbox = focussheet.childsboxes.Last
+										Else
+											'CLOSE focussheet
+											blSheet.CloseSheet(focussheet)
+									
+											focussheet = o1
+										EndIf
+								
+										Local alr = 0
+								
+										For Local o2:= EachIn o1.childsboxes
+											' i riquadri di disegno non hanno un documento di testo
+											If o2.doc = Null Then Continue
+											If dcmove <> Null And o2.doc.fullname = dcmove.fullname Then alr = 1; Exit
+										Next
+								
+										If alr = 0 Then
+											o1.childsboxes.AddLast(boxmove)
+											o1.focusbox = boxmove
+										Else
+											o1.focusbox = o1.childsboxes.Last
+										EndIf
+								
+										If not focussheet.childsboxes.IsEmpty Then
+											focussheet.focusbox = focussheet.childsboxes.Last
+										Else
+											blSheet.CloseSheet(focussheet)
+									
+											focussheet = blSheet.allsheets.Last
+									
+										EndIf
+								
+										'										boxmove = Null
+								
+										Exit
+								
+									EndIf
+								EndIf
+						
+							Next
+
+						EndIf
+											
+					EndIf
+					
+					'						boxmove = Null
+					'If touchdown = 0 or touchrel = 1 Then
+					'	boxmove = Null
+					'EndIf
+			
+				EndIf
+			
+				If touchdown = 0 or touchrel = 1 Then boxmove = Null
+			
+				
+			Default
+		 
+				Local pcol:Int = IdeUiSidePanelColor(typewin)
+				Local kr:Float = ( (pcol Shr 16) & 255)
+				Local kg:Float = ( (pcol Shr 8) & 255)
+				Local kb:Float = (pcol & 255)
+			
+				Local kmin = 50
+				Local ksot:Float = 0.25
+			
+				For Local xst = 4 To xca2 - 6
+				
+					canv.SetColor kr / 255.0, kg / 255.0, kb / 255.0
+			
+					canv.DrawRect(x1 + xca1 + xst, y1 + yca1 + 4, 1, 20)
+				
+					kr = kr - ksot
+					If kr < kmin Then kr = kmin
+				
+					kg = kg - ksot
+					If kg < kmin Then kg = kmin
+				
+					kb = kb - ksot
+					If kb < kmin Then kb = kmin
+				
+				Next
+			
+			
+				font1.DrawText(canv, namewin, x1 + xca1 + 5, y1 + yca1 + 8, COLOR_WHITE, 4, 1)
+				If blForceCanvasFlush Then canv.Flush
+			
+				
+				Local xvb, yvb, wvb, hvb
+				Local xhb, yhb, whb, hhb
+				
+				Select typewin
+				
+					Case 2, 5
+				
+						
+		
+						xvb = x1 + xca1 + xca2 - 25
+						yvb = y1 + yca1 + 25
+						wvb = 20
+						hvb = yca2 - 48
+				
+						xhb = x1 + xca1 + 5
+						yhb = y1 + yca1 + yca2 - 24
+						whb = xca2 - 30
+						hhb = 20
+		
+						VSBar.xb1 = xvb
+						VSBar.yb1 = yvb
+						VSBar.wb1 = wvb
+						VSBar.hb1 = hvb
+		
+						HSBar.xb1 = xhb
+						HSBar.yb1 = yhb
+						HSBar.wb1 = whb
+						HSBar.hb1 = hhb
+				
+				
+				End
+				
+				
+				Select typewin
+				
+					Case 2
+					
+						'note: DRAW SHORTCUTS
+						
+						'Local ysc = y1 + yca1 + 26
+						
+						If focussheet Then
+						
+							Local bo:= focussheet.focusbox
+						
+							If bo Then
+						
+								bo.shortcutm.Draw(canv, x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41)
+						
+								'blShortcut.Draw(canv, x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41)
+													
+								'55,63,71
+								'canv.DrawImageRect(objs, xlabs + 5, ylabs + 5, 0, 55, 8, 8, 0, 2, 2)
+								'canv.DrawImageRect(objsimg, x1 + xca1 + 8, y1 + yca1 + 28, 8, 63, 8, 8, 0, 2.2, 2.2)
+						
+						
+								'canv.DrawRect(x1 + xca1 + 5, y1 + yca1 + 28, xca2 - 10, yca2 - 41)
+				
+								VSBar.DrawBar(canv)
+								HSBar.DrawBar(canv)
+						
+							EndIf
+						
+						EndIf
+						
+						
+					Case 3
+				
+						'note: DRAW CONSOLE
+					
+						idfocus = 2
+						
+						consolewin.DrawTextBox(canv, x1 + xca1, y1 + yca1 + 24, xca2 - 4, yca2 - 29)
+						
+						'VSBar.DrawBar(canv)
+						'HSBar.DrawBar(canv)
+						
+					Case 4
+				
+						'note: DRAW ERRORS (OLD)
+				
+						idfocus = 3
+						
+						'errorswin.DrawTextBox(canv, x1 + xca1, y1 + yca1 + 24, xca2 - 4, yca2 - 29)
+						
+						
+					Case 5
+					
+						'note: DRAW ERRORS
+						
+						idfocus = 4
+						
+						ErrorList.Draw(canv, x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41)
+						
+						VSBar.DrawBar(canv)
+						'HSBar.DrawBar(canv)
+						
+						
+						
+				End
+				
+				'Select typewin
+				
+				'Case 2, 3
+					
+					
+				
+				'End
+				
+		End
+						
+		
+	End Method
+
+		
+	Method UpdateWin(x1, y1, x2, y2)
+	
+		Local xca1 = GetAbsX(xo1)
+		Local yca1 = GetAbsY(yo1)
+		Local xca2 = GetAbsX(xo2) - xca1
+		Local yca2 = GetAbsY(yo2) - yca1
+		
+	
+		'DRAW CHILDS
+		Select typewin
+		
+			Case 1
+		
+				'note: UPDATE SHEETS WIN
+				
+				Local numx = 1
+			
+				boxmoveon = Null
+			
+				Local drawmi = 0 ' 1
+				
+				For Local o1:= EachIn blSheet.allsheets
+		
+					'o1.DrawSheet(canv, xca1, yca1, xca2, yca2)
+					'Local xwe = o1.xo1 * xca2
+					'Local ywe = o1.yo1 * yca2
+					'Local wwe = o1.xo2 * xca2 - xwe
+					'Local hwe = o1.yo2 * yca2 - ywe
+				
+					'If IsOnRect(xwe + xca1, ywe + yca1, wwe, hwe) Then
+				
+					'o1.UpdateSheetMouseWheel() 'x1 + xca1, y1 + yca1, xca2, yca2)
+					
+					'Print Millisecs + " ---> " + numx + "," + (xwe + xca1) + "," + (ywe + yca1)
+					
+					
+					'EndIf
+				
+					'o1.UpdateSheetMouseWheel(x1 + xca1, y1 + yca1, xca2, yca2)
+				
+					'If o1 = blSheet.focussheet Then
+					actsheet = o1
+				
+					o1.UpdateSheet(x1 + xca1, y1 + yca1, xca2, yca2)
+					
+					'EndIf
+					If o1.childsboxes.Count > 0 Then drawmi = 0
+					
+					numx += 1
+				
+				Next
+			
+				For Local o1:= EachIn blSheetsSplitter.sheetsplits
+		
+					'o1.DrawSheet(canv, xca1, yca1, xca2, yca2)
+					o1.UpdateSheetSplitter(x1 + xca1, y1 + yca1, xca2, yca2)
+		
+				Next
+		
+				
+				If drawmi Then
+				
+					If touchrel Then
+						
+						If xmou > x1 + xca1 and xmou < x1 + xca1 + xca2 Then
+						
+							Local yy = y1 + yca1
+						
+							If ymou < yy + 120 Then Print "O1"
+						
+							If ymou > yy + 130 and ymou < yy + 240 Then Print "O2"
+						
+							If ymou > yy + 250 and ymou < yy + 360 Then Print "O3"
+				
+						EndIf
+								
+					EndIf
+				
+				EndIf
+				
+				
+			Case 2
+			
+				If focussheet Then
+				
+					Local bo:= focussheet.focusbox
+				
+					If bo Then
+				
+						bo.shortcutm.Update(x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41)
+				
+						'Local maxy = (blShortcut.maxnumlines) -VSBar.hb1 / Float(ykscale)
+						'VSBar.maxv = maxy
+				
+						Local maxx = bo.shortcutm.maxlenline - HSBar.wb1 + xkscale + bo.shortcutm.drawoffx
+						HSBar.maxv = maxx
+						
+						Local maxy = (bo.shortcutm.maxnumlines) - VSBar.hb1 / Float(22) + 1
+						VSBar.maxv = maxy
+						
+				
+						If zmou <> 0 Then
+			
+							If IsOnRect(x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41) Then
+			
+								bo.shortcutm.idstartsc = bo.shortcutm.idstartsc - zmou * 2 '; Print zmou
+				
+								VSBar.value = bo.shortcutm.idstartsc
+				
+								VSBar.SetOBARFromValue()
+		
+							EndIf
+					
+						EndIf
+									
+				
+						If focusboxold <> focussheet.focusbox Then
+					
+							VSBar.value = bo.shortcutm.idstartsc
+				
+							VSBar.SetOBARFromValue()
+				
+							'Print "CHG"
+					
+						EndIf
+				
+					
+						VSBar.UpdateBar()
+						HSBar.UpdateBar()
+				
+						bo.shortcutm.idstartsc = VSBar.value
+						bo.shortcutm.drawoffx = HSBar.value
+				
+					
+					EndIf
+				
+				EndIf
+				
+				
+			Case 3
+
+				'note: UPDATE CONSOLE
+				
+				'cbox.VSBar.UpdateBar()
+				'cbox.HSBar.UpdateBar()
+
+				'				If KeyHit(KEY_F3) Then
+				'
+				'					Local c = Rnd(4)
+				'
+				'					cbox.AddText("1234567890 " + invio + " ABCDEFG", c + 100)
+				'					cbox.MakeLines2
+				'
+				'				EndIf
+			
+				'				If xmou > x1 + xca1 and xmou < y1 + yca1 + 24 and ymou > x1 + xca1 + xca2 - 4 and ymou < y1 + yca1 + 24 + yca2 - 29 Then
+				'
+				'					If touchhit Then idfocus = 2
+				'
+				'				EndIf
+					
+				idfocus = 2
+				
+				consolewin.UpdateTextBox(x1 + xca1, y1 + yca1 + 24, xca2 - 4, yca2 - 29)
+				
+				consolewin.UpdateTextBoxOne(x1 + xca1, y1 + yca1 + 24, xca2 - 4, yca2 - 29)
+							
+				
+				'cbox.CaretOutOfScreen(x1 + xca1, y1 + yca1 + 24, xca2 - 4, yca2 - 29)
+				
+			Case 4
+			
+			
+				idfocus = 3
+				
+				'errorswin.UpdateTextBox(x1 + xca1, y1 + yca1 + 24, xca2 - 4, yca2 - 29)
+				
+				'errorswin.UpdateTextBoxOne(x1 + xca1, y1 + yca1 + 24, xca2 - 4, yca2 - 29)
+			
+				
+			Case 5
+				
+				idfocus = 4
+				
+				ErrorList.Update(x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41)
+				
+				VSBar.UpdateBar()
+				'HSBar.UpdateBar()
+				
+			
+		End
+		
+		
+		
+	End
+		
+End
+
+Class blShortcutManager
+	
+	Global KYSCUT1 = 22
+	Global KYSCUT2 = 16
+
+	Field allshortcuts:= New List<blShortcut>
+	
+	Field ydrawsc
+	
+	Field maxlenline
+	
+	Field maxnumlines
+	
+	Field idstartsc
+	Field idstartsc2
+	
+	Field scmove:blShortcut
+	Field scmovex
+	Field scmovey
+	
+	Field scchgon
+	Field scchgx
+	Field scchgy
+
+	Field drawoffx
+	
+	Method New()
+		
+	
+	
+	End
+	
+	Method AddShortcut:blShortcut(nam:String, tip)
+	
+		local sc:=New blShortcut
+	
+		sc.scname = nam
+		sc.sctype = tip
+		
+		sc.sclist = New blShortcutList
+		
+		allshortcuts.AddLast sc
+	
+		Return sc
+		
+	End
+	
+	Method Draw(canv:Canvas, x1, y1, x2, y2)
+		
+		ydrawsc = y1
+		maxlenline = 0
+		idstartsc2 = 0
+		
+		
+		canv.SetScissor x1, y1, x2 - 20, y2
+		
+		For Local o1:= EachIn allshortcuts
+				
+			DrawShortcut(canv, o1, x1, x2, y1 + y2)
+		
+		Next
+		
+		canv.SetScissor 0, 0, DeviceWidth, DeviceHeight
+		
+		
+		If scmove Then
+			
+			Local xx = scmovex + xmou
+			Local yy = scmovey + ymou
+			
+			If Abs(scchgx - xmou) > 3 or Abs(scchgy - ymou) > 3 Then scchgon = 0
+			
+			Local xpm = scmove.scstate * 23
+			
+			MySetColor(canv, $ffffff)
+			
+			canv.DrawImageRect(objsimg, xx, yy, 40 + xpm, 54, 22, 22)
+								
+			font1.DrawText(canv, scmove.scname, xx + 25, yy + 3, COLOR_AZURE, 4, 1)
+			
+		
+			If touchrel or touchdown Then
+				
+				If yy < allshortcuts.First.scydraw Then
+				
+					MoveShortcut(allshortcuts.First, 0)
+					
+				Else
+				
+					For Local o1:= EachIn allshortcuts
+				
+						If yy > o1.scydraw Then
+					
+							MoveShortcut(o1, 1)
+					
+						EndIf
+			
+					Next
+			
+				EndIf
+				
+			EndIf
+			
+		EndIf
+		If blForceCanvasFlush Then canv.Flush
+		
+	End
+	
+	Method MoveShortcut(sc1:blShortcut, mo)
+	
+	
+		Local tt:= allshortcuts.ToArray
+		
+		Local L:= New List<blShortcut>
+		
+		'Local mp:Mytextbox
+		
+		Select mo
+		
+			Case 0
+		
+				L.AddLast scmove
+				
+				For Local i:int = 0 To tt.Length - 1
+		
+					'If tt[i].num = idmainproject Then mp = tt[i]
+					If tt[i] <> scmove Then
+					
+						L.AddLast tt[i]
+			
+					EndIf
+							
+				Next
+				
+			Case 1
+			
+				For Local i:int = 0 To tt.Length - 1
+		
+					'If tt[i].num = idmainproject Then mp = tt[i]
+					If tt[i] <> scmove Then
+					
+						L.AddLast tt[i]
+			
+					EndIf
+			
+					If tt[i] = sc1 Then
+					
+						L.AddLast scmove
+			
+					EndIf
+			
+				Next
+			
+		End
+						
+		allshortcuts = L
+	
+	
+	End
+	Method Update(x1, y1, x2, y2)
+	
+		ydrawsc = y1
+		maxnumlines = 0
+		idstartsc2 = 0
+		
+		For Local o1:= EachIn allshortcuts
+				
+			UpdateShortcut(o1, x1, x2, y1 + y2)
+		
+		Next
+		
+		If touchrel or (touchdown = 0 and touchhit = 0) Then scmove = Null
+			
+		
+	End
+	
+	
+	
+	Function SC_ThemeColIdx:Int(idx:Int)
+		If idx >= 0 And idx < themecolor.Length Then Return themecolor[idx]
+		Return COLOR_AZURE
+	End
+	
+	Function SC_KindThemeCol:Int(kindWord:String)
+		Local ku:String = kindWord.ToUpper()
+		If ku = "METHOD" Then Return SC_ThemeColIdx(8)
+		If ku = "FUNCTION" Then Return SC_ThemeColIdx(10)
+		If ku = "LOCAL" Then Return SC_ThemeColIdx(6)
+		If ku = "GLOBAL" Then Return SC_ThemeColIdx(5)
+		If ku = "FIELD" Then Return SC_ThemeColIdx(7)
+		If ku = "PROPERTY" Then Return SC_ThemeColIdx(7)
+		If ku = "CLASS" Or ku = "INTERFACE" Then Return SC_ThemeColIdx(9)
+		Return -1
+	End
+	
+	Method DrawShortcutListText(canv:Canvas, n1:String, n2:String, x:Int, y:Int, nameCol:Int, cf:ColorFormat)
+		Local xx:Float = x
+
+		' Nel dialetto 1 (MSXCompiler) la parte prima della "@" e' solo la chiave
+		' con cui l'evidenziazione ritrova la variabile: il testo da mostrare,
+		' nome compreso, sta tutto in n2. Disegnare anche n1 stampava il nome due
+		' volte. In CerbIDE invece n1 e' la dichiarazione e n2 il resto della
+		' firma, quindi vanno disegnati tutti e due.
+		If blHLBasicVariant = 1 And n2 <> "" Then n1 = ""
+
+		Local drewN1:Int = 0
+		Local sp:Int = n1.Find(" ")
+		If sp > 0 Then
+			Local kindStr:String = LeftString(n1, sp)
+			Local kc:Int = SC_KindThemeCol(kindStr)
+			If kc >= 0 Then
+				font1.DrawText(canv, kindStr + " ", xx, y, kc, 4, 1)
+				xx = font1.xsav
+				Local rest:String = n1[sp + 1 ..]
+				If rest <> "" Then
+					font1.DrawText(canv, rest, xx, y, nameCol, 4, 1)
+					xx = font1.xsav
+				EndIf
+				drewN1 = 1
+			EndIf
+		EndIf
+		
+		If drewN1 = 0 And n1 <> "" Then
+			font1.DrawText(canv, n1, xx, y, nameCol, 4, 1)
+			xx = font1.xsav
+			If n2 = "" Then Return
+			font1.DrawText(canv, " ", xx, y, nameCol, 4, 1)
+			xx = font1.xsav
+		ElseIf n2 = "" Then
+			Return
+		ElseIf drewN1 Then
+			font1.DrawText(canv, " ", xx, y, nameCol, 4, 1)
+			xx = font1.xsav
+		EndIf
+		
+		Local sp2:Int = n2.Find(" ")
+		Local kc2:Int = -1
+		Local kind2:String = ""
+		If sp2 > 0 Then
+			kind2 = LeftString(n2, sp2)
+			kc2 = SC_KindThemeCol(kind2)
+		EndIf
+		
+		If cf Then
+			If kc2 >= 0 Then
+				font1.DrawText(canv, kind2 + " ", xx, y, kc2, 4, 1)
+				xx = font1.xsav
+				MySetColor canv, nameCol
+				font1.DrawColorText(canv, n2[sp2 + 1 ..], xx, y, cf, 4, 1)
+			Else
+				MySetColor canv, nameCol
+				font1.DrawColorText(canv, n2, xx, y, cf, 4, 1)
+			EndIf
+		ElseIf kc2 >= 0 Then
+			font1.DrawText(canv, kind2 + " ", xx, y, kc2, 4, 1)
+			xx = font1.xsav
+			font1.DrawText(canv, n2[sp2 + 1 ..], xx, y, nameCol, 4, 1)
+		Else
+			font1.DrawText(canv, n2, xx, y, nameCol, 4, 1)
+		EndIf
+	End
+	
+	Method DrawShortcut(canv:Canvas, o1:blShortcut, xk, x2, y2)
+	
+		'Local bo:= focussheet.focusbox
+		
+		Local x1 = xk - drawoffx
+				
+		'Local t = sctype
+
+		'If KeyHit(KEY_F10) and t = 1 Then ClearList
+							
+		'Select t
+							
+		'Case 0, 1, 2
+		o1.scydraw = -100000
+		
+		Local l = o1.sclist.sclistname.Length
+		
+		If CheckStartDraw Then
+		
+			Local cc = o1.sctype
+			
+			If l = 0 Then cc = COLOR_GRAY
+			
+			MySetColor(canv, cc)
+			
+			Local xpm = o1.scstate * 23
+			canv.DrawImageRect(objsimg, x1, ydrawsc, 40 + xpm, 54, 22, 22)
+								
+			font1.DrawText(canv, o1.scname, x1 + 25, ydrawsc + 3, cc, 4, 1)
+				
+			o1.scydraw = ydrawsc
+			
+			ydrawsc = ydrawsc + KYSCUT1
+			
+		EndIf
+				
+		If o1.scstate Then
+								
+			Local k = -2
+					
+			For Local i = 0 To l - 1
+					
+				If CheckStartDraw Then
+						
+					MySetColor(canv, o1.sctype)
+					
+					canv.DrawLine(x1 + 10, ydrawsc + k, x1 + 10, ydrawsc + 8)
+					canv.DrawLine(x1 + 10, ydrawsc + 8, x1 + 30, ydrawsc + 8)
+														
+					Local n1:= o1.sclist.sclistname[i]
+					Local n2:= o1.sclist.sclistname2[i]
+					
+					Local kkk:Int
+					
+					If o1.scidonm = i Then kkk = COLOR_ORANGE Else kkk = COLOR_AZURE
+					
+					DrawShortcutListText(canv, n1, n2, x1 + 35, ydrawsc, kkk, o1.sclist.cform)
+					
+					If maxlenline < font1.xsav Then maxlenline = font1.xsav
+						
+						
+					k = -14
+						
+					ydrawsc = ydrawsc + KYSCUT2
+				
+					If ydrawsc > y2 Then Exit
+						
+				EndIf
+						
+			Next
+		
+		EndIf
+			
+		'End
+	
+	End
+	
+	
+	Method UpdateShortcut(o1:blShortcut, x1, x2, y2)
+	
+
+		'Local t = sctype
+
+		'If KeyHit(KEY_F10) and t = 1 Then ClearList
+							
+		'Select t
+							
+		'Case 0, 1, 2
+		
+		Local l = o1.sclist.sclistname.Length
+		
+		If CheckStartDraw Then
+				
+			If ymou < y2 - 9 Then
+				If IsOnRect(x1, ydrawsc, x2 - 22, KYSCUT1) Then
+			
+					If touchhit and scmove = Null Then
+				
+						scmove = o1
+						scmovex = x1 - xmou
+						scmovey = ydrawsc - ymou
+					
+						scchgon = 1
+						scchgx = xmou
+						scchgy = ymou
+					
+					EndIf
+				
+					If touchrel Then
+				 
+						If scchgon Then o1.scstate = 1 - o1.scstate
+						scmove = Null
+											
+					EndIf
+				
+				EndIf
+			EndIf
+									
+			ydrawsc = ydrawsc + KYSCUT1
+			'maxnumlines = maxnumlines + 1
+					
+		EndIf
+			
+		If l = 0 Then o1.scstate = 0
+		
+		maxnumlines = maxnumlines + 1
+				
+		o1.scidonm = -1
+		
+		If o1.scstate Then
+			
+			For Local i = 0 To l - 1
+					
+				If CheckStartDraw Then
+						
+					If ydrawsc > y2 Then
+						
+					Else
+						
+						If ymou < y2 - 9 Then
+							If IsOnRect(x1, ydrawsc, x2 - 22, KYSCUT2) Then
+							
+								o1.scidonm = i
+								
+								If touchrel Then
+								
+									Local targetFile:String = ""
+									If o1.sclist.sclistfile.Length > i Then targetFile = o1.sclist.sclistfile[i]
+									
+									If targetFile <> "" Then
+										Local curFile:String = ""
+										If focussheet And focussheet.focusbox And focussheet.focusbox.doc Then curFile = focussheet.focusbox.doc.fullname
+										
+										Local curNorm:= curFile.Replace("\", "/").ToLower()
+										Local tgtNorm:= targetFile.Replace("\", "/").ToLower()
+										
+										If curNorm <> tgtNorm
+											OpenProject targetFile, o1.sclist.sclistline[i]
+										EndIf
+									EndIf
+									
+									' La lista degli shortcut la riempiono anche i riquadri di disegno (e'
+									' l'albero degli oggetti 3D), ma il salto qui sotto e' roba da testo:
+									' porta il cursore a una riga del documento. Con un blDrawbox a fuoco
+									' doc e' Null e si cadeva proprio qui. Sul disegno il click sulla voce
+									' per ora si limita a evidenziarla.
+									If focussheet <> Null And focussheet.focusbox <> Null And focussheet.focusbox.doc <> Null Then
+									
+										Local tgtLn:Int = o1.sclist.sclistline[i]
+										If tgtLn < 0 Then tgtLn = 0
+										Local maxLn:Int = focussheet.focusbox.doc.numtotallines - 2
+										If maxLn < 0 Then maxLn = 0
+										If tgtLn > maxLn Then tgtLn = maxLn
+									
+										Local kl = focussheet.focusbox.numlineinpage / 2
+									
+										focussheet.focusbox.line = tgtLn - kl
+									
+										If focussheet.focusbox.line < 0 Then focussheet.focusbox.line = 0
+									
+										focussheet.focusbox.VSBar.value = focussheet.focusbox.line
+										focussheet.focusbox.VSBar.SetOBARFromValue
+									
+										focussheet.focusbox.idcaret = focussheet.focusbox.doc.idline[tgtLn]
+										focussheet.focusbox.idstartsel = focussheet.focusbox.idcaret
+										focussheet.focusbox.idendsel = focussheet.focusbox.idcaret
+										focussheet.focusbox.GetCursorLine()
+									
+										focussheet.focusbox.lineevid = tgtLn + 1
+										focussheet.focusbox.lineevidcount = 300
+									
+									EndIf
+									
+									'Print o1.sclist.sclistline[i]
+									
+								EndIf
+							EndIf
+						EndIf
+						
+					EndIf
+						
+					ydrawsc = ydrawsc + KYSCUT2
+					'maxnumlines = maxnumlines + 1
+						
+				EndIf
+						
+				maxnumlines = maxnumlines + 1
+					
+			Next
+		
+		EndIf
+			
+		'End
+	
+	End
+		
+	Method CheckStartDraw()
+	
+		idstartsc2 = idstartsc2 + 1
+	
+		If idstartsc2 > idstartsc Then Return 1 Else Return 0
+		
+	End
+	
+		
+End
+
+Class blShortcut
+	' usato da CxCAD
+	Field scidsel:Int = -1
+
+	
+	Field sctype
+	Field scname:String
+	Field scstate
+	Field scydraw
+	
+	Field scidonm
+	
+	Field sclist:blShortcutList
+	
+	Method New()
+	
+	End Method
+				
+End
+
+
+Class blShortcutList
+
+	Field sclistname:String[]
+	Field sclistname2:String[]
+	Field sclistline:Int[]
+	Field sclistidfile:Int[]
+	Field sclistfile:String[]
+	
+	'Field scidonm
+		
+	Field cform:ColorFormat
+	
+	Method New()
+	
+	End
+
+	Method ClearList()
+	
+		sclistname = sclistname.Resize(0)
+		sclistname2 = sclistname2.Resize(0)
+		sclistline = sclistline.Resize(0)
+		sclistidfile = sclistidfile.Resize(0)
+		sclistfile = sclistfile.Resize(0)
+				
+	End Method
+	
+	Method AddShortcut(nm:String, ln, file:String)
+	
+		Local l = sclistname.Length
+		
+		sclistname = sclistname.Resize(l + 1)
+		sclistname2 = sclistname2.Resize(l + 1)
+		sclistline = sclistline.Resize(l + 1)
+		sclistidfile = sclistidfile.Resize(l + 1)
+		sclistfile = sclistfile.Resize(l + 1)
+		
+		
+		Local nm2:= nm.Split("@")
+		
+		sclistname[l] = nm2[0]
+		
+		If nm2.Length = 2 Then sclistname2[l] = nm2[1]
+		
+		sclistline[l] = ln
+		
+		'file...
+		sclistfile[l] = file
+		
+		
+	End Method
+	
+End
+
+
+Class ErrorList
+	
+	Global MAXERR = 2000
+	
+	Global iderrors = 0
+	
+	Global nameerr:String[MAXERR]
+	Global fileerr:String[MAXERR]
+	Global lineerr:Int[MAXERR]
+	
+	Global onlinerr
+	
+	Global kx1:Float = 0.45
+	Global kx2:Float = 0.9
+	
+	'Global titerr:String[] =["Description", "File", "Line"]
+	
+	Function Clear()		
+	
+		iderrors = 0
+		ErrorList.fileerr[0] = ""
+		
+	End
+	
+	Function Draw(canv:Canvas, x1, y1, x2, y2)
+	
+		'Draw(canv, x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41)
+	
+		Local y = y1 + 5
+		
+		Local x2b = x2 - 20
+		
+		'Local krx1:Float = kx1 * x2
+		'Local krx2:Float = kx2 * x2
+		
+		If iderrors > 0 Then
+			'For Local i = 0 To iderrors - 1
+		
+			Local CC
+		
+			For Local i = -1 To 0
+			
+				Local ne:String
+				Local fe:String
+				Local ln:String
+				
+				Select i
+				
+					Case -1
+					
+						ne = "Description"
+						fe = "File"
+						ln = "Line"
+						CC = $ffffff
+					
+					Default
+					
+						ne = nameerr[i]
+						fe = fileerr[i]
+						ln = String(lineerr[i])
+						CC = $ffaaaa
+						
+				End
+				
+			
+				Local xa1:Float
+				Local wa1:Float
+				
+				If onlinerr = i Then
+				
+					canv.SetAlpha 1
+					canv.SetColor(1, 1, 0)
+					canv.DrawRect(x1, y - 3, x2b, 20)
+					
+				EndIf
+				
+				For Local j = 0 To 2
+				
+					canv.SetAlpha 0.9
+					canv.SetColor(0.2, 0.2, 0.2)
+							
+					Local txt:String
+					
+					Select j
+					
+						Case 0
+						
+							xa1 = x1
+							wa1 = kx1 * x2b
+							txt = ne
+						
+						Case 1
+						
+							xa1 = x1 + kx1 * x2b
+							wa1 = (kx2 - kx1) * x2b
+							txt = fe
+							
+						Case 2
+						
+							xa1 = x1 + kx2 * x2b
+							wa1 = (1 - kx2) * x2b 'x2b - xa1
+							txt = ln
+						
+					End
+				
+					'canv.SetScissor x1 + 2, y - 2, 200, 18
+					canv.SetScissor(xa1 + 1, y - 2, wa1 - 2, 18)
+				
+					'canv.DrawRect(x1 + 2, y - 2, 200, 18)
+					'canv.DrawRect(x1 + 2, y - 2, x2 * kx1 - x1 - 4, 18)
+					canv.DrawRect(xa1 + 1, y - 2, wa1 - 2, 18)
+						
+					canv.SetAlpha 1
+					
+					font1.DrawText(canv, txt, xa1 + 4, y, CC, 4, 1)
+			
+			
+					'					canv.SetColor(0.2, 0.2, 0.2)
+					'
+					'					canv.SetScissor x1 + 204, y - 2, 300, 18
+					'
+					'					'canv.DrawRect(x1 + 204, y - 2, 300, 18)
+					'					canv.DrawRect(x1 + x2 * kx1 - 2, y - 2, x2 * kx2 - x1 - 4, 18)
+					'
+					'					font1.DrawText(canv, fe, x1 + 207, y, CC, 4, 1)
+					'
+					'
+					'					canv.SetColor(0.2, 0.2, 0.2)
+					'
+					'					canv.SetScissor x1 + 506, y - 2, 40, 18
+					'
+					'					'canv.DrawRect(x1 + 506, y - 2, 40, 18)
+					'					canv.DrawRect(x1 + x2 * kx2, y - 2, 40, 18)
+					'
+					'					font1.DrawText(canv, ln, x1 + 509, y, CC, 4, 1)
+		
+				
+				Next
+				
+				canv.SetScissor 0, 0, DeviceWidth, DeviceHeight
+				
+				y = y + 20
+			
+			Next
+							
+		Else
+		
+			If ischecking = 0 Then
+				
+				font1.DrawText(canv, "Everything is OK", x1 + 5, y, COLOR_LIGHTGREEN, 4, 1)
+				
+			EndIf
+			
+		EndIf
+		
+		
+		
+		
+		'canv.SetColor(1, 0, 0)
+		'canv.DrawRect(x1 + 10, y1 + 10, x2 - 40, y2 - 30)
+		
+	End
+
+	Function Update(x1, y1, x2, y2)
+	
+		'Draw(canv, x1 + xca1 + 5, y1 + yca1 + 26, xca2 - 10, yca2 - 41)
+
+		onlinerr = -100
+		
+		Local y = y1 + 5 + 20
+		
+		'For Local i = 0 To iderrors - 1
+		For Local i = 0 To 0
+		
+			If IsOnRect(x1, y, 700, 19) Then
+			
+				onlinerr = i
+			
+				If touchhit Then
+				
+					Local fe:= fileerr[i]
+					Local ln:= lineerr[i]
+					
+					If fe <> "" Then OpenProject(fe, ln)
+				
+				EndIf
+			
+			EndIf
+		
+		Next
+		
+	End
+	
+End
+
+
+

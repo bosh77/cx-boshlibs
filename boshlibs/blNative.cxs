@@ -1,0 +1,14 @@
+
+' blNative - just the bridge to native/boshlib.cpp, which contains the common
+' C++ includes and convertBBString / convertBBStringToWide.
+'
+' Why a module for a single line: transcc does NOT deduplicate native file
+' Imports, so importing "native/boshlib.cpp" from two different modules would
+' emit it twice in the generated main.cpp -> redefinition error. Cerberus
+' module Imports are deduplicated instead, so every module that needs the
+' helpers just imports this one.
+'
+' It must be imported BEFORE the .cpp files that need it: the Imports at the
+' top of each file that uses them guarantee this.
+
+Import "native/boshlib.cpp"

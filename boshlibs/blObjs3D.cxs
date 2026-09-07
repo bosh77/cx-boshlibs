@@ -1,0 +1,202 @@
+' blObjs3D - modello degli oggetti 3D (Obj3D e sottoclassi, EditVertex, EditFace).
+' Spostato qui da CxCAD/objs.cxs il 2026-09-03: non dipende da CxCAD, solo da
+' mojo2 e vortex3, e serve a blDrawboxes.
+
+
+Import mojo2
+Import vortex3
+
+
+Class Obj3D
+	Field nome:String
+	Field worldname:String
+End
+
+
+Class Model3D Extends Obj3D
+
+	Field modello:Model
+	Field wiremodel:Model
+	Field basematerials:material.Material[]
+	Field basematerialsvalid:Int
+	Field editmesh:EditableMesh
+	Field editmode:Int
+	Field selkind:Int '0=none 1=vertex 2=edge 3=face
+	Field selindex:Int = -1
+	
+	Field x1:Float
+	Field y1:Float
+	Field z1:Float
+	
+	Method EnsureEditMesh:EditableMesh()
+		If editmesh = Null Then editmesh = New EditableMesh
+		Return editmesh
+	End
+	
+	Method ClearSelection()
+		selkind = 0
+		selindex = -1
+		If editmesh Then editmesh.ClearSelection()
+	End
+	
+End
+
+Class EditVertex
+	Field x:Float
+	Field y:Float
+	Field z:Float
+	Field selected:Int
+	Field hidden:Int
+End
+
+Class EditEdge
+	Field v1:Int = -1
+	Field v2:Int = -1
+	Field fleft:Int = -1
+	Field fright:Int = -1
+	Field selected:Int
+	Field hidden:Int
+End
+
+Class EditFace
+	Field verts:Int[] = New Int[0]
+	Field edges:Int[] = New Int[0]
+	Field selected:Int
+	Field hidden:Int
+	Field col:Int = $FFFFFFFF
+	
+	Method AddVert(idx:Int)
+		Local n:Int = verts.Length
+		verts = verts.Resize(n + 1)
+		verts[n] = idx
+	End
+	
+	Method AddEdge(idx:Int)
+		Local n:Int = edges.Length
+		edges = edges.Resize(n + 1)
+		edges[n] = idx
+	End
+End
+
+Class EditableMesh
+	Field verts:EditVertex[] = New EditVertex[0]
+	Field edges:EditEdge[] = New EditEdge[0]
+	Field faces:EditFace[] = New EditFace[0]
+	Field dirty:Int = 1
+	Field selkind:Int
+	Field selindex:Int = -1
+	Field rendercol:Int = $FFD0D0D0
+	
+	Method AddVertex:Int(x:Float, y:Float, z:Float)
+		Local v:EditVertex = New EditVertex
+		v.x = x ; v.y = y ; v.z = z
+		Local n:Int = verts.Length
+		verts = verts.Resize(n + 1)
+		verts[n] = v
+		dirty = 1
+		Return n
+	End
+	
+	Method AddEdge:Int(v1:Int, v2:Int)
+		Local e:EditEdge = New EditEdge
+		e.v1 = v1 ; e.v2 = v2
+		Local n:Int = edges.Length
+		edges = edges.Resize(n + 1)
+		edges[n] = e
+		dirty = 1
+		Return n
+	End
+	
+	Method AddFace:Int(vids:Int[])
+		Local f:EditFace = New EditFace
+		For Local i:Int = 0 Until vids.Length
+			f.AddVert(vids[i])
+		Next
+		Local n:Int = faces.Length
+		faces = faces.Resize(n + 1)
+		faces[n] = f
+		dirty = 1
+		Return n
+	End
+	
+	Method ClearSelection()
+		selkind = 0
+		selindex = -1
+		For Local i:Int = 0 Until verts.Length
+			If verts[i] Then verts[i].selected = 0
+		Next
+		For Local i:Int = 0 Until edges.Length
+			If edges[i] Then edges[i].selected = 0
+		Next
+		For Local i:Int = 0 Until faces.Length
+			If faces[i] Then faces[i].selected = 0
+		Next
+	End
+End
+
+Class Line3D Extends Obj3D
+
+	Field modello:Model
+	Field isgrid:Int
+
+	Field x1:Float
+	Field y1:Float
+	Field z1:Float
+
+	Field x2:Float
+	Field y2:Float
+	Field z2:Float
+
+End
+
+Class Image3D Extends Obj3D
+
+	Field img:Image
+	Field filn:String
+	Field modello:Model
+
+	Field x1:Float
+	Field y1:Float
+	Field z1:Float
+	Field pitch:Float
+	Field yaw:Float
+	Field roll:Float
+	Field sx:Float = 100
+	Field sy:Float = 100
+	Field sz:Float = 1
+	
+End
+
+Class Text3D Extends Obj3D
+
+	Field txt:String
+	Field txti:Image
+	Field modello:Model
+
+	Field x1:Float
+	Field y1:Float
+	Field z1:Float
+	Field pitch:Float
+	Field yaw:Float
+	Field roll:Float
+	Field sx:Float = 100
+	Field sy:Float = 40
+	Field sz:Float = 1
+	Field justx:Int = 1 '0=LEFT 1=CENTER 2=RIGHT
+	Field justy:Int = 1 '0=TOP 1=MIDDLE 2=BOTTOM
+
+End
+
+Class Circle3D Extends Obj3D
+
+	Field modello:Model
+	Field x1:Float
+	Field y1:Float
+	Field z1:Float
+	Field radius:Float
+	Field segments:Int = 48
+
+End
+
+
+

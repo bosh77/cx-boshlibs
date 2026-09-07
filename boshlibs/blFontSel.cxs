@@ -1,0 +1,506 @@
+' blFontSel - finestra di scelta del font, pronta all'uso.
+'
+' Vive in boshlibs ma importa guiBasic2, quindi NON e' nell'ombrello
+' (`Import boshlibs`): se ne paga il costo solo chi la importa davvero, come
+' avviene per blDrawboxes con vortex3.
+'
+' Uso minimo, da un'applicazione qualsiasi:
+'
+'     #NATIVEFONTSON = 1          ' richiesto: usa i font di sistema
+'     Import boshlibs.blFontSel
+'
+'     FontSelOpen(MainScreen)   ' apre la finestra
+'     FontSelDraw()             ' nel proprio OnRender
+'     FontSelUpdate()           ' nel proprio OnUpdate
+'
+' Il font scelto finisce in xfont1name e kscalefont (globali di blFonts).
+
+Import guiBasic2
+Import blFonts
+Import blGraphics
+Import blFuncs
+Import blConsts
+
+
+Class blFontSelWin
+
+	' Schermo su cui viene montata la finestra: lo passa l'applicazione a Open().
+	Global parentscr:Gui
+
+
+	Global winselfont:Gui
+	Global winselfontvsbar:blScrollBar
+	Global winselfontboxc:Gui
+	Global winselfontboxd:Gui
+	Global textcaract:String
+	Global textdimens:String
+	Global winselfontlbd:Gui
+	Global winselfontlbdval:Gui[16]
+	Global winselbuttok:Gui
+	Global fontsh:blFont
+	Global fontsx:blFont[8]
+	Global idfontsx
+	Global idfontsxsel
+	Global fontsxrefr
+	Global allfonts:String[]
+	Global visfonts:String[]
+	Global idvisfonts
+	Global winselfontvsbarval2:Float
+	Global textcaron
+	Global onlymono '= 1
+	Global kscalefont2
+
+
+	Function InitWinSelectFont()
+	
+		kscalefont2 = kscalefont
+			 
+		If kscalefont2 < 2 Then kscalefont2 = 12
+		
+		winselfont = Gui.CreateWindow(300, 150, 600, 460, "Select Font", parentscr, 1, 1, 0, 0, 0, 1, 0) ', Order = 1, Closeable = 1,Minimisable = 1, Maximisable = 1, Sizeable = 1, Moveable = 1, Statusbar = 1)
+		winselfont.Visible = 0
+			
+		winselfontboxc = Gui.CreateTextField(10, 10, 450, 25, winselfont, "", 1, 1, 1, 0)
+		winselfontboxd = Gui.CreateTextField(470, 10, 70, 25, winselfont, "", 1, 1, 1, 0)
+	
+		winselfontlbd = Gui.CreateListbox(470, 44, 70, 240, winselfont)
+		
+		Local ldim:String = "8,9,10,11,12,14,16,18,20,22,24,26,28,36,48,72"
+		Local ldim2:= ldim.Split(",")
+		
+		For Local i = 0 To ldim2.Length - 1
+			winselfontlbdval[i] = Gui.CreateListboxItem(ldim2[i], winselfontlbd)
+		Next
+		
+		winselbuttok = Gui.CreateButton(250, 370, 100, 40, "OK", winselfont, 0)
+		
+		allfonts = blFont.GetFontList()
+		
+		visfonts = visfonts.Resize(allfonts.Length)
+		
+		'winselfontvsbar = Gui.CreateVScrollbar(435, 42, 25, 240, 0, allfonts.Length - 8, winselfont, 0, 5)
+		winselfontvsbar = New blScrollBar(0, 0, 20, 240, 0, visfonts.Length - 8, 5, 0)
+		
+		
+		RefreshFontList
+		
+		
+		winselfontboxc.Text = xfont1name
+		winselfontboxd.Text = String(kscalefont)
+				
+		textcaract = xfont1name
+		textdimens = String(kscalefont2)
+		
+		
+	End Function
+
+	Function DrawWinSelectFont()
+
+		Gui.SetColor 100,100,100
+		Gui.DrawRect(winselfont.X + 16, winselfont.Y + 90, 425, 240)
+
+		'Gui.SetColor 255, 255, 255
+		winselfontvsbar.xb1 = winselfont.X + 16 + 425
+		winselfontvsbar.yb1 = winselfont.Y + 90
+		
+		
+		If fontsxrefr = 0 Then
+			
+			RefreshFontList
+				
+			fontsxrefr = 1
+		
+		EndIf
+		
+		
+		If 1 = 10 Then
+			Gui.SetColor 0, 0, 255
+			Gui.canv.DrawRect(500, 100, fontsh.table1.Width, fontsh.table1.Height)
+		
+			Gui.SetColor 255, 255, 255
+			Gui.canv.DrawImage(fontsh.table1, 500, 100)
+		EndIf
+		
+		For Local i = 0 To 7
+			
+			If fontsx[i] Then
+			
+				Local yf = winselfont.Y + 90 + i * 30
+						
+				If idfontsxsel = i + idfontsx Then
+					Gui.SetColor 55, 155, 255
+					Gui.canv.DrawRect(winselfont.X + 16, yf, 425, 30)
+				EndIf
+			
+				If fontsx[i] Then
+					Gui.SetColor 255, 255, 255
+					DrawString(Gui.canv, fontsx[i], visfonts[i + idfontsx], winselfont.X + 40, yf, -1, 0, 1)
+				EndIf
+			
+			EndIf
+			
+		Next
+		
+		Gui.SetColor 30, 30, 30
+		
+		Gui.canv.SetScissor winselfont.X + 32, winselfont.Y + 350, 540,100
+		
+		DrawString(Gui.canv, fontsh, "AaBbYyZz 0123 !#$%&", winselfont.X + 32, winselfont.Y + 350, -1, 0, 1)
+		
+		Gui.canv.SetScissor 0, 0, DeviceWidth, DeviceHeight
+		
+		winselfontvsbar.DrawBar(Gui.canv)
+		
+		
+	End Function
+
+	Function UpdateWinSelectFont()
+		
+		winselfontvsbar.UpdateBar
+		
+		If winselfontvsbarval2 <> winselfontvsbar.value Then
+			
+			idfontsx = winselfontvsbar.value
+			
+			winselfontvsbarval2 = winselfontvsbar.value
+			
+			fontsxrefr = 0
+									
+		EndIf
+		
+		If zmou <> 0 Then
+			
+			If IsOnRect(winselfont.X + 30, winselfont.Y + 90, 425, 240) Then
+			
+				idfontsx = idfontsx - zmou
+				
+				If idfontsx > idvisfonts - 8 Then idfontsx = idvisfonts - 8
+							
+				If idfontsx < 0 Then idfontsx = 0
+				
+				winselfontvsbar.value = idfontsx
+				winselfontvsbar.SetOBARFromValue
+				
+				fontsxrefr = 0
+				
+			EndIf
+			
+		EndIf
+			
+		For Local i = 0 To 7
+			
+			If idfontsx + i < idvisfonts and idfontsxsel < idvisfonts Then
+				
+				If visfonts[idfontsx + i] Then
+			
+					Local yf = winselfont.Y + 90 + i * 30
+			
+					If IsTouchHit(winselfont.X + 16, yf, 420, 30) Then
+			
+						idfontsxsel = idfontsx + i
+				
+						winselfontboxc.Text = visfonts[idfontsx + i]
+						textcaract = winselfontboxc.Text
+				
+						fontsh = New blFont(visfonts[idfontsxsel], kscalefont2)
+			
+						textcaron = 0
+						'fontsxrefr = 0
+				
+					EndIf
+			
+				EndIf
+				
+			EndIf
+		Next
+			
+		
+		If winselfontboxc.Text <> textcaract Then
+		
+			textcaract = winselfontboxc.Text
+			'Print "click"
+			
+			'If textcaract <> "" Then textcaron = 1 Else textcaron = 0
+			
+			idfontsx = 0
+			idfontsxsel = 0
+			
+			textcaron = 1
+			
+			fontsxrefr = 0
+			
+		EndIf
+		
+		If winselfontboxd.Text <> textdimens Then
+		
+			textdimens = winselfontboxd.Text
+			'Print "click"
+			
+			'If textcaract <> "" Then textcaron = 1 Else textcaron = 0
+			
+			'idfontsx = 0
+			'idfontsxsel = 0
+			
+			'textcaron = 1
+			
+			'fontsxrefr = 0
+			
+			Local vv = Int(textdimens)
+			
+			If vv < 4 Then vv = 4
+			If vv > 100 Then vv = 100
+			
+			If vv <> Int(textdimens) Then
+				winselfontboxd.Text = String(vv)
+				textdimens = winselfontboxd.Text
+			EndIf
+			
+			kscalefont2 = vv
+				
+			fontsh = New blFont(visfonts[idfontsxsel], kscalefont2)
+			
+		EndIf
+		
+		
+		If winselbuttok.IsClicked Then
+			
+			xfont1name = visfonts[idfontsxsel]
+		
+			kscalefont = kscalefont2
+			
+			blSheet.Init
+			
+			winselfont.Visible = 0
+			
+		EndIf
+		
+		
+		For Local i = 0 To 15
+		
+			If winselfontlbdval[i].IsClicked Then
+			
+				'Print winselfontlbdval[i].Text
+				
+				Local vv = Int(winselfontlbdval[i].Text)
+				kscalefont2 = vv
+				
+				fontsh = New blFont(visfonts[idfontsxsel], kscalefont2)
+				
+				winselfontboxd.Text = String(vv)
+				textdimens = winselfontboxd.Text
+				
+			EndIf
+		
+		Next
+		
+		
+	End Function
+
+	Function CreateFontList()
+		
+	
+	End Function
+
+	Function RefreshFontList()
+	
+	
+		For Local i = 0 To 7
+			fontsx[i] = Null
+		Next
+		
+		'visfonts = visfonts.Resize(allfonts.Length)
+		
+		Local idvf = 0
+		
+		For Local i = 0 To allfonts.Length - 1
+			
+			If textcaron Then
+				
+				Local n:String = allfonts[i]
+				
+				If n.ToUpper.Contains(textcaract.ToUpper) = True Then
+					
+					visfonts[idvf] = allfonts[i]
+					idvf = idvf + 1
+				
+				EndIf
+			
+			Else
+			
+				visfonts[idvf] = allfonts[i]
+				idvf = idvf + 1
+				
+			EndIf
+				
+		Next
+		
+		idvisfonts = idvf
+		
+		
+		'If idvf < 10 Then idvf = 10
+		
+		'visfonts = visfonts.Resize(idvf)
+		
+		Local idfo = 0
+		
+		Repeat
+		
+			If idfo + idfontsx >= idvf Then Exit
+			
+			Local n:String = visfonts[idfo + idfontsx]
+		
+			If onlymono Then
+				
+				Local fo:= New blFont(n, 25)
+					
+				If fo.w[73] = fo.w[87] Then
+								
+					If AddFontToList(fo) Then Exit
+				
+				EndIf
+					
+				idfo = idfo + 1
+		
+				If idfo + idfontsx >= visfonts.Length Then Exit
+										
+				Continue
+				
+			
+				'			ElseIf textcaron Then
+				'
+				'				If n.ToUpper.Contains(textcaract.ToUpper) = True Then
+				'
+				'					Local fo:= New blFont(n, 25)
+				'
+				'					If AddFontToList(fo) Then Exit
+				'
+				'				Else
+				'
+				'					idfo = idfo + 1
+				'
+				'					If idfo > 7 Then Exit
+				'
+				'					Continue
+				'
+				'				EndIf
+					
+			Else
+		
+				Local fo:= New blFont(n, 25)
+					
+				If AddFontToList(fo) Then Exit
+				
+			EndIf
+			
+			idfo = idfo + 1
+		
+			If idfo > 7 Then Exit
+		
+		Forever
+		
+		
+		fontsh = New blFont(visfonts[idfontsxsel], kscalefont2)
+		
+		Local id2 = idvisfonts - 8
+		
+		If id2 < 0 Then id2 = 0
+		
+		winselfontvsbar.maxv = id2
+		
+		
+		'Return
+		
+		
+		'		For Local i = 0 To 7
+		'
+		'			Repeat
+		'
+		'				Local n:String = allfonts[i + idfontsx]
+		'
+		'				If textcaron Then
+		'
+		'					If n.Contains(textcaract) = False Then
+		'
+		'						idfontsx = idfontsx + 1
+		'
+		'						If idfontsx > allfonts.Length - 8 Then idfontsx = allfonts.Length - 8; Exit
+		'
+		'						Continue
+		'
+		'					EndIf
+		'
+		'				EndIf
+		'
+		'
+		'				If onlymono Then
+		'					If fontsx[i].w[73] = fontsx[i].w[87] Then Exit
+		'
+		'					idfontsx = idfontsx + 1
+		'
+		'					If idfontsx > allfonts.Length - 8 Then idfontsx = allfonts.Length - 8; Exit
+		'				Else
+		'					Exit
+		'				EndIf
+		'
+		'			Forever
+		'
+		'			If idfontsx > allfonts.Length - 8 Then idfontsx = allfonts.Length - 8; Exit
+		'
+		'		Next
+				
+	End
+
+	Function AddFontToList(f:blFont)
+	
+		For Local i = 0 To 7
+			
+			If fontsx[i] = Null Then fontsx[i] = f; Return 0
+		
+		Next
+		
+		Return 1
+		
+	End Function
+
+	' Apre la finestra di scelta font, creandola alla prima chiamata.
+	Function Open:Void(parent:Gui)
+		If winselfont = Null Then
+			parentscr = parent
+			InitWinSelectFont
+		EndIf
+		winselfont.Visible = 1
+	End
+
+	' Da chiamare nel proprio ciclo di disegno e di aggiornamento.
+	Function Draw:Void()
+		DrawWinSelectFont
+	End
+
+	Function Update:Void()
+		UpdateWinSelectFont
+	End
+
+End
+
+
+' --- funzioni pronte all'uso -------------------------------------------
+' La classe si chiama blFontSelWin e non blFontSel perche' in Cerberus il nome
+' del modulo ha la precedenza: blFontSel.X verrebbe letto come "modulo.simbolo".
+
+Function FontSelOpen:Void(parent:Gui)
+	blFontSelWin.Open(parent)
+End
+
+Function FontSelDraw:Void()
+	blFontSelWin.Draw()
+End
+
+Function FontSelUpdate:Void()
+	blFontSelWin.Update()
+End
+
+' 1 se la finestra e' aperta.
+Function FontSelVisible:Int()
+	If blFontSelWin.winselfont = Null Then Return 0
+	Return blFontSelWin.winselfont.Visible
+End

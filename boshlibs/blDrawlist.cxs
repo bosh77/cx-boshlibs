@@ -1,0 +1,487 @@
+
+
+Import mojo2
+
+Import blPrinter
+Import brl.databuffer
+
+
+
+Import saveImageMojo
+
+' Print resolution scale and base path: they were declared in
+' the cxnativesdemo copy, missing here (the code that uses them wasn't
+' being compiled because nobody reached it).
+Global kres:Float = 1
+Global pathx:String
+
+
+
+
+' _CreateText is provided by blPrinter (native/blPrinterText-*.cpp), for all
+' platforms: native/blDrawlist.cpp was Windows-only and duplicated the symbol.
+'Import "native/blDrawlist.cpp"
+
+
+Extern
+
+
+Function CreateText:Int[] (txt:String, fo:String, sz) = "_CreateText"
+
+
+
+Public
+
+
+Global pixelpercm:Float
+
+
+Class DrawCommand 'Extends BBDrawCommand
+
+	Method Draw2(ca:Canvas) 'xxca, yyca, wwca, hhca)
+		
+	End
+	
+	Method Update2()
+		
+	End Method
+	
+	Method Print2()
+		
+	
+	End Method
+	
+End
+
+Class AddText Extends DrawCommand
+
+	'	Field _drawtext:BBDrawText
+	
+	Field x:Float, y:Float
+	Field text:String
+	Field font:String
+	Field size:Int
+	Field just:Int
+	Field color:Int
+	
+	Field buff:Int[]
+	Field w, h
+	
+	Field textrend:Image
+	
+	Method New()
+	End
+	
+	Method New(xx, yy, txt:String, fo:String, sz, ju, col)
+	
+		'		_drawtext = New BBDrawText() 'xx, yy, txt, fo, sz, col)
+		'
+		'		_drawtext._Create(xx, yy, txt, fo, sz, col)
+		
+		x = xx
+		y = yy
+		text = txt
+		font = fo
+		size = sz
+		just = ju
+		color = col | $ff000000
+
+		
+		Local db:int[]
+		
+		'		db = CreateText(100, 100, "Ciao mondo!!", "Vineta BT", 40, JsMiddleCenter, COL_BLUE)
+		db = CreateText(txt, fo, sz)
+		
+		
+		Print db.Length
+		
+		Print db[0]
+		Print db[1]
+		
+		Local ww = db[0]
+		Local hh = db[1]
+		
+		w = ww
+		h = hh
+		
+		textrend = New Image(ww, hh, 0, 0)
+		
+		Local l = ww * hh * 4
+		
+		Local dd:DataBuffer = New DataBuffer(l)
+		
+		Local j = 2
+		
+		Local ka
+		
+		For Local i = 0 To l - 1 Step 4
+		
+			If db[j] < 128 Then
+				ka = 255
+			Else
+				ka = 0
+			EndIf
+			  
+			dd.PokeByte(i + 0, ka)
+			dd.PokeByte(i + 1, ka)
+			dd.PokeByte(i + 2, ka)
+			dd.PokeByte(i + 3, ka)
+			
+			'			dd.PokeByte(i + 0, 255)
+			'			dd.PokeByte(i + 1, db[j + 1])
+			'			dd.PokeByte(i + 2, db[j + 2])
+			'			dd.PokeByte(i + 3, db[j + 0])
+		
+			j = j + 4
+		Next
+		
+		textrend.WritePixels(0, 0, ww, hh, dd)
+		
+		Local l2 = l / 4
+		
+		buff = buff.Resize(l2)
+		
+		For Local i = 0 To l2 - 1
+			'			dd.PokeByte(i * 4 + 1, 0)
+			buff[i] = dd.PeekInt(i * 4)
+		Next
+	
+	End Method
+	
+	Method Draw2(ca:Canvas) 'xxca, yyca, wwca, hhca)
+		
+		'Print text
+		'		_drawtext._Draw
+		'ro = ro + z1 / 20.0
+		
+		ca.SetAlpha 1
+		ca.SetColor color
+		ca.DrawImage(textrend, x, y, 0, 1, 1)
+
+		
+	End
+	
+	Method Update2()
+		
+	End Method
+	
+	Method Print2()
+		
+		Local rr:Float = ( (color shr 16) & 255) / 255.0
+		Local gg:Float = ( (color shr 8) & 255) / 255.0
+		Local bb:Float = (color & 255) / 255.0
+		
+		Local ksize:Float = 1
+		
+		_PrintText(x, y, buff, w, h, rr, gg, bb, ksize, pixelpercm)
+		
+		'Print text
+		
+		'_PrintText
+		
+	End Method
+	
+End
+
+Class AddImage Extends DrawCommand
+
+	
+	'	Field _drawimg:BBDrawImage
+	
+	Field x:Float, y:Float
+	
+	Field filenm:String
+	
+	Field imagedrw:Image
+	
+	'	Field text:String
+	'	Field font:NativeFonts
+	'	Field size:Int
+	'	Field color:Int
+	
+	'	Function DRAWSTART()
+	'
+	'		'		BBDrawImage._DRAWSTART
+	'
+	'	End
+	
+	Method New()
+	End
+	
+	Method New(xx, yy, fn:String) ', txt:String, fo:NativeFonts, sz, col)
+	
+		x = xx
+		y = yy
+		
+		filenm = fn.Replace("\", "/")
+	
+		'Local III:= Image.Load(filenm, 0, 0, 0)
+		
+		Local WP = 2100 * kres
+		Local HP = 2970 * kres
+		
+		'PROVA ********
+		Local I:= New Image(WP, HP, 0, 0)
+		Local C:= New Canvas(I)
+		
+		C.SetColor(1, 0, 0)
+		C.DrawLine(100 * kres, 300 * kres, 1800 * kres, 300 * kres)
+		C.DrawLine(100 * kres, 300 * kres, 100 * kres, 120 * kres)
+		C.DrawLine(1800 * kres, 300 * kres, 1800 * kres, 120 * kres)
+		
+		C.DrawLine(20 * kres, 80 * kres, 20 * kres, 2080 * kres)
+		C.DrawLine(20 * kres, 80 * kres, 80 * kres, 80 * kres)
+		C.DrawLine(20 * kres, 2080 * kres, 80 * kres, 2080 * kres)
+		
+		C.SetColor(0, 0, 1)
+		C.DrawCircle(600, 600, 140)
+		C.SetColor(1, 1, 1)
+		C.DrawCircle(600, 600, 138)
+		'C.DrawRect(1, 1, 1298, 2098)
+		'C.DrawImage III, 10, 10
+		
+		C.Flush
+		
+		Local db:= New DataBuffer(WP * HP * 4)
+		C.ReadPixels(0, 0, WP, HP, db)
+		
+			
+		Local I2:= New Image(WP, HP, 0, 0)
+		I2.WritePixels(0, 0, WP, HP, db)
+		
+		'SavePNG "C:\Dany\my\_APP\cxnativesdemo\cxnativesdemo.data\x.png", C
+		'SavePNG "D:\my\_APP\cxnativesdemo\cxnativesdemo.data\x.png", C
+		SavePNG pathx, C
+		
+		imagedrw = I2
+		
+		Print "OK"
+		
+		'imagedrw = Image.Load(filenm, 0, 0, 0)
+		
+		'		_drawimg = New BBDrawImage() 'xx, yy, txt, fo, sz, col)
+		
+		'		_drawimg._Create(xx, yy) ', txt, fo, sz, col)
+				
+		
+	End Method
+	
+	Method Draw2(ca:Canvas) 'xxca, yyca, wwca, hhca)
+		
+		ca.DrawImage(imagedrw, x, y)
+		
+		'Print text
+		'		_drawimg._Draw
+		
+	End
+	
+	Method Update2()
+		
+	End Method
+	
+	Method Print2()
+		
+		_PrintImage(x, y, filenm, pixelpercm / kres)
+		
+		
+	End Method
+	
+End
+
+Class AddLine Extends DrawCommand
+
+	Field x1:Float, y1:Float
+	Field x2:Float, y2:Float
+	Field wl:Float
+	Field color:Int
+	
+	Method New(xx1, yy1, xx2, yy2, spess, col)
+	
+		x1 = xx1
+		y1 = yy1
+		x2 = xx2
+		y2 = yy2
+		wl = spess
+		color = col | $ff000000
+		
+	End Method
+	
+	Method Draw2(ca:Canvas)
+		
+		ca.SetLineWidth wl
+		
+		ca.SetColor color
+		
+		ca.DrawLine(x1, y1, x2, y2)
+	End
+	
+	Method Update2()
+		
+	End Method
+	
+	Method Print2()
+		
+		Local rr:Float = (color shr 16) & 255
+		Local gg:Float = (color shr 8) & 255
+		Local bb:Float = color & 255
+		
+		_PrintLine(x1, y1, x2, y2, wl, rr, gg, bb, pixelpercm)
+		
+	
+	End Method
+	
+End
+
+
+Class AddRect Extends DrawCommand
+
+	Field x1:Float, y1:Float
+	Field x2:Float, y2:Float
+	Field wl:Float
+	Field color:Int
+	
+	Method New(xx1, yy1, xx2, yy2, spess, col)
+	
+		x1 = xx1
+		y1 = yy1
+		x2 = xx2
+		y2 = yy2
+		wl = spess
+		color = col | $ff000000
+		
+	End Method
+	
+	Method Draw2(ca:Canvas)
+		
+		ca.SetLineWidth wl
+		
+		ca.SetColor color
+		
+		'		ca.DrawRect(x1, y1, x2, y2)
+		
+		Local spess:Float = wl / 4.0
+		
+		ca.DrawLine(x1 - spess, y1, x2 + spess, y1)
+		ca.DrawLine(x1 - spess, y2, x2 + spess, y2)
+		ca.DrawLine(x1, y1, x1, y2)
+		ca.DrawLine(x2, y1, x2, y2)
+		
+	End
+	
+	Method Update2()
+		
+	End Method
+	
+	Method Print2()
+	
+		Local rr = (color shr 16) & 255
+		Local gg = (color shr 8) & 255
+		Local bb = color & 255
+		
+		_PrintRect(x1, y1, x2, y2, wl, rr, gg, bb, pixelpercm)
+				
+		
+		
+	End Method
+	
+End
+
+
+'Class DrawImage Extends DrawCommand
+'	Field x:Float, y:Float
+'	'	Field y:Float
+'	Field img:Image
+'End
+
+Class MyDrawList 'Extends BBMyDrawList
+	Field commands:List<DrawCommand> = New List<DrawCommand>()
+
+	Method AddCommand(cmd:DrawCommand)
+		commands.AddLast(cmd)
+	End
+End
+
+Interface IRenderer
+	Method Render(list:DrawList)
+	'	Method DrawText(cmd:DrawText)
+	Method DrawText2(cmd:DrawCommand)
+	Method DrawLine2(cmd:DrawLine)
+	Method DrawImage2(cmd:DrawImage)
+End
+
+Class CanvasRenderer Implements IRenderer
+		
+	
+	Method Render(list:MyDrawList, ca:Canvas)
+	
+		
+		'		DrawImage.DRAWSTART
+		
+		For Local cmd:= EachIn list.commands
+			
+			'			If DrawText(cmd) Then Continue
+			'			If DrawLine(cmd) Then Continue
+			'			If DrawImage(cmd) Then Continue
+			cmd.Draw2(ca)
+			
+		Next
+	End
+
+	Method DrawText2(cmd:DrawText)
+		' OpenGL 2.0 calls to draw text here
+	End
+
+	Method DrawLine2(cmd:DrawLine)
+		' OpenGL calls for lines here
+	End
+
+	Method DrawImage2(cmd:DrawImage)
+		' OpenGL calls for images here
+	End
+End
+
+
+Class PrinterRenderer Implements IRenderer
+
+	Method Render(list:MyDrawList)
+		
+	
+		pixelpercm = _StartPrintDocument / 100.0 '* kres
+			
+		Print pixelpercm
+		
+		For Local cmd:=EachIn list.commands
+			'			If DrawText(cmd) Then Continue
+			'			If DrawLine(cmd) Then Continue
+			'			If DrawImage(cmd) Then Continue
+
+			cmd.Print2
+			
+
+		Next
+				
+		_EndPrintDocument
+		
+	End
+
+	Method DrawText(cmd:DrawText)
+		' Conversion to printer commands here
+	End
+
+	Method DrawLine(cmd:DrawLine)
+		' Lines with printer API here
+	End
+
+	Method DrawImage(cmd:DrawImage)
+		' Print image
+	End
+End
+
+'Local scene:= New DrawList
+'scene.AddCommand(New DrawText(100,200,"Ciao mondo","Arial",12,$FFFFFF))
+'scene.AddCommand(New DrawLine(50, 50, 200, 200, 2.0, $FF0000))
+
+
+
+
+

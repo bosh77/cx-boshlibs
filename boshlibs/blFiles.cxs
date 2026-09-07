@@ -1,0 +1,631 @@
+Import blTheme
+Import blHooks
+
+Import blFuncs
+Import brl.filestream
+Import brl.filesystem
+Import brl.filepath
+Import os
+Import brl.requesters
+
+Import blSheets
+Import blTextboxes
+
+
+'FILES MANAGER
+
+' ============================================================================
+'  AUTO-RELOAD OF FILES MODIFIED EXTERNALLY  (Windows / MacOS / Linux)
+' ----------------------------------------------------------------------------
+'  How it works:
+'
+'  - every open blDocument is "stamped" with (FileTime + FileSize) of the file
+'    on disk. os.FileTime / os.FileSize are implemented with stat() inside
+'    brl/native/filesystem.cpp, identical on the 3 OSs: so NO extra native
+'    code is needed, the system is already portable as it is.
+'
+'  - at regular intervals (BLF_WATCH_INTERVAL_MS) the stamp is re-read.
+'    If it changed, the file is NOT reloaded right away: it waits until the
+'    stamp stays stable for BLF_WATCH_STABLE_MS. Needed to avoid reading a
+'    file while another editor is still writing it (non-atomic write).
+'
+'  - when the stamp is stable, RELOADMODE is applied:
+'       RELOADMODE = 0 -> automatic and silent reload
+'       RELOADMODE = 1 -> confirmation window "Reload it from disk?"
+'    In both modes, if the document has unsaved changes in the IDE the
+'    confirmation window appears anyway (see comment on RELOADMODE).
+'
+'  - the reload preserves line/column of the caret and the scroll of EVERY
+'    textbox showing that document (split views included).
+'
+'  IMPORTANT: the comparison is by DIFFERENCE of the stamp, not by "newer".
+'  A file can legitimately go back to an OLDER mtime: restore from backup,
+'  copy preserving timestamps, git checkout of a previous version, unzip
+'  over the sources. A check like "mtime > last seen" would lose all these
+'  cases and leave on screen content that no longer exists on disk. Don't
+'  change it into an ordering comparison.
+'
+'  Note on resolution: st_mtime has 1-second granularity. The comparison
+'  also includes the file size, so two writes in the same second are still
+'  detected if the length changes. Moreover, before reloading the read text
+'  is compared with the one in memory: if they match nothing is touched
+'  (undo/redo stay intact).
+' ============================================================================
+
+
+' 1 = watcher active, 0 = disabled
+Global blfWatchOn:Int = 1
+
+' RELOAD MODE
+'
+'   RELOADMODE = 0  ->  the file is updated AUTOMATICALLY, without asking
+'   RELOADMODE = 1  ->  a window appears asking whether to reload
+'
+' Safety exception also valid with RELOADMODE = 0: if the document has
+' unsaved changes in the IDE, the confirmation window appears anyway.
+' Reloading automatically would throw away the user's work, and the undo,
+' after the reload, can no longer recover it.
+Global RELOADMODE:Int = 0
+
+' If 1: when an open file is deleted/renamed outside the IDE, the document
+' is marked as modified, so the text isn't lost and on close saving is
+' proposed.
+Global blfWatchMarkOnDelete:Int = 1
+
+Const BLF_WATCH_INTERVAL_MS:Int = 700
+Const BLF_WATCH_STABLE_MS:Int = 250
+
+' Markers used instead of the numeric stamp
+Const BLF_STAMP_MISSING:String = "-"
+Const BLF_STAMP_NOPATH:String = "?"
+
+' normalized path -> known stamp ("mtime|size")
+Global blfWatchStamps:= New StringMap<String>
+
+' normalized path -> new stamp waiting to stabilize
+Global blfWatchPendStamp:= New StringMap<String>
+
+' normalized path -> Millisecs at which the new stamp was seen
+Global blfWatchPendMs:= New StringMap<Int>
+
+Global blfWatchLastMs:Int
+Global blfWatchSuspend:Int
+Global blfWatchBusy:Int
+Global blfReadOk:Int
+
+' Counter of the reloads done (handy for debug / status bar)
+Global blfWatchReloadCount:Int
+
+
+' ---------------------------------------------------------------------------
+'  UTILITY
+' ---------------------------------------------------------------------------
+
+Function BLFILES_Key:String(path:String)
+
+	If path = "" Then Return ""
+
+	Return HL_NormalizePath(path)
+
+End Function
+
+
+' Current stamp of the file on disk.
+Function BLFILES_Stamp:String(path:String)
+
+	If path = "" Then Return BLF_STAMP_NOPATH
+
+	If os.FileType(path) <> os.FILETYPE_FILE Then Return BLF_STAMP_MISSING
+
+	Return String(os.FileTime(path)) + "|" + String(os.FileSize(path))
+
+End Function
+
+
+' Reads the text of a file with the same rules as blDocument.LoadFile:
+' UTF-8 BOM removed and line endings normalized to CR+LF.
+Function BLFILES_ReadFileText:String(path:String)
+
+	blfReadOk = 0
+
+	If path = "" Then Return ""
+
+	If os.FileType(path) <> os.FILETYPE_FILE Then Return ""
+
+	Local datag:DataBuffer = DataBuffer.Load(path)
+
+	If datag = Null Then Return ""
+
+	Local l:Int = datag.Length
+	Local dt:Int[l]
+
+	For Local k:Int = 0 To l - 1
+		dt[k] = datag.PeekByte(k) & 255
+	Next
+
+	datag.Discard
+
+	blfReadOk = 1
+
+	Return blDocument.AdjustText(StripUtf8BomFromText(String.FromChars(dt)))
+
+End Function
+
+
+' ---------------------------------------------------------------------------
+'  REGISTRAZIONE / AGGIORNAMENTO TIMBRI
+' ---------------------------------------------------------------------------
+
+' Realigns the stamp of a file to the current state on disk, so the
+' change won't be reported as external.
+' Call it after every write done by the IDE itself.
+Function BLFILES_WatchTouch:Void(path:String)
+
+	Local k:String = BLFILES_Key(path)
+
+	If k = "" Then Return
+
+	blfWatchStamps.Set(k, BLFILES_Stamp(path))
+
+	blfWatchPendStamp.Remove(k)
+	blfWatchPendMs.Remove(k)
+
+End Function
+
+
+Function BLFILES_WatchForget:Void(path:String)
+
+	Local k:String = BLFILES_Key(path)
+
+	If k = "" Then Return
+
+	blfWatchStamps.Remove(k)
+	blfWatchPendStamp.Remove(k)
+	blfWatchPendMs.Remove(k)
+
+End Function
+
+
+' Realigns all open documents to the state on disk (no reload).
+Function BLFILES_WatchResyncAll:Void()
+
+	For Local d_any:= EachIn blSheet.docum
+		Local d:= blDocument(d_any)
+		If d = Null Then Continue
+
+		If d = Null Then Continue
+		If d.fullname = "" Then Continue
+
+		BLFILES_WatchTouch(d.fullname)
+
+	Next
+
+End Function
+
+
+' Suspends the check (e.g. during batch operations of the IDE).
+Function BLFILES_WatchSuspend:Void()
+
+	blfWatchSuspend = blfWatchSuspend + 1
+
+End Function
+
+
+Function BLFILES_WatchResume:Void()
+
+	blfWatchSuspend = blfWatchSuspend - 1
+
+	If blfWatchSuspend < 0 Then blfWatchSuspend = 0
+
+' After a suspension the stamps can be misaligned:
+	' realign them all without reloading anything.
+	If blfWatchSuspend = 0 Then BLFILES_WatchResyncAll()
+
+End Function
+
+
+' Forces an immediate check at the next update.
+Function BLFILES_WatchCheckNow:Void()
+
+	blfWatchLastMs = 0
+
+End Function
+
+
+' ---------------------------------------------------------------------------
+'  RICARICA DEL DOCUMENTO
+' ---------------------------------------------------------------------------
+
+' Reloads the document from disk preserving caret and scroll of all the
+' textboxes showing it. Returns 1 if the reload really happened.
+Function BLFILES_ReloadDoc:Int(d:blDocument)
+
+	If d = Null Then Return 0
+	If d.fullname = "" Then Return 0
+	If d.textlocked Then Return 0
+
+	Local newtxt:String = BLFILES_ReadFileText(d.fullname)
+
+	If blfReadOk = 0 Then Return 0
+
+' Content identical to the one in memory: I touch nothing, so a simple
+	' "touch" of the timestamp doesn't wipe undo/redo.
+	If newtxt = d.Text Then
+
+		d.textchanged = 0
+		BLFILES_WatchTouch(d.fullname)
+
+		Return 0
+
+	EndIf
+
+' --- 1) I save the logical position (line/column) and scroll of each view
+
+	Local boxes:blGraphic[] = New blGraphic[8]
+	Local savLn:Int[] = New Int[8]
+	Local savCol:Int[] = New Int[8]
+	Local savTop:Int[] = New Int[8]
+	Local nb:Int = 0
+
+	For Local o1:= EachIn blSheet.allsheets
+
+		For Local proj:= EachIn o1.childsboxes
+
+			If proj = Null Then Continue
+			If proj.doc <> d Then Continue
+
+			proj.AC_Close()
+			proj.GetCursorLine()
+
+			Local ln:Int = proj.linecaret
+			If ln < 0 Then ln = 0
+
+			Local col:Int = 0
+
+			If ln < d.idlines - 1 Then col = proj.idcaret - d.idline[ln]
+			If col < 0 Then col = 0
+
+			If nb >= boxes.Length Then
+				boxes = boxes.Resize(nb + 8)
+				savLn = savLn.Resize(nb + 8)
+				savCol = savCol.Resize(nb + 8)
+				savTop = savTop.Resize(nb + 8)
+			EndIf
+
+			boxes[nb] = proj
+			savLn[nb] = ln
+			savCol[nb] = col
+			savTop[nb] = proj.line
+
+			nb = nb + 1
+
+		Next
+
+	Next
+
+' --- 2) I replace the text
+
+	d.Text = newtxt
+	d.textchanged = 0
+
+' undo/redo are no longer consistent with the new content: I reset them
+	d.URstates = New URstate[d.maxur + 1]
+	d.idurstates = 0
+	d.idurstates2 = 0
+
+' --- 3) I rebuild lines/cache and restore caret + scroll
+
+	For Local i:Int = 0 To nb - 1
+
+		Local proj:blGraphic = boxes[i]
+
+		proj.MakeLines2()
+
+		Local lastLn:Int = d.numtotallines - 2
+		If lastLn < 0 Then lastLn = 0
+
+		Local ln:Int = savLn[i]
+		If ln > lastLn Then ln = lastLn
+		If ln < 0 Then ln = 0
+
+		Local s:Int = d.idline[ln]
+		Local e:Int = d.idline[ln + 1] - 1
+
+		While e >= s
+			Local c:Int = d.Crs[e] & 255
+			If c <> 13 And c <> 10 And c <> 0 Then Exit
+			e = e - 1
+		Wend
+
+		Local maxcol:Int = e - s + 1
+		If maxcol < 0 Then maxcol = 0
+
+		Local col:Int = savCol[i]
+		If col > maxcol Then col = maxcol
+		If col < 0 Then col = 0
+
+		proj.idcaret = s + col
+		proj.GetCursorLine()
+
+		proj.idstartsel = 0
+		proj.idendsel = 0
+		proj.idselect1 = 0
+		proj.idselect2 = 0
+		proj.line2 = -1
+		proj.lineerror = -1
+
+		Local top:Int = savTop[i]
+		If top > lastLn Then top = lastLn
+		If top < 0 Then top = 0
+
+		proj.line = top
+
+		If proj.VSBar Then
+			proj.VSBar.value = top
+			proj.VSBar.SetOBARFromValue
+		EndIf
+
+	Next
+
+	d.numtotallines2 = d.numtotallines
+
+	BLFILES_WatchTouch(d.fullname)
+
+	blfWatchReloadCount = blfWatchReloadCount + 1
+
+' the content changed: I relaunch the parser for errors/identifiers
+	CheckerErrorsStart()
+
+	Return 1
+
+End Function
+
+
+' ---------------------------------------------------------------------------
+'  LOOP DI CONTROLLO  (da chiamare in OnUpdate)
+' ---------------------------------------------------------------------------
+
+Function BLFILES_WatchUpdate:Void()
+
+	If blfWatchOn = 0 Then Return
+	If blfWatchSuspend > 0 Then Return
+	If blfWatchBusy Then Return
+
+	Local now:Int = Millisecs()
+
+	If blfWatchLastMs <> 0 And now - blfWatchLastMs < BLF_WATCH_INTERVAL_MS Then Return
+
+	blfWatchLastMs = now
+
+	blfWatchBusy = 1
+
+' I collect first and act later, to not modify the lists while iterating them.
+	Local toreload:= New List<blDocument>
+	Local toask:= New List<blDocument>
+
+	Local alive:= New StringMap<Int>
+
+	For Local d_any:= EachIn blSheet.docum
+		Local d:= blDocument(d_any)
+		If d = Null Then Continue
+
+		If d = Null Then Continue
+		If d.fullname = "" Then Continue
+
+		Local k:String = BLFILES_Key(d.fullname)
+		If k = "" Then Continue
+
+		alive.Set(k, 1)
+
+		Local cur:String = BLFILES_Stamp(d.fullname)
+
+' first sighting: just record, no reload
+		If Not blfWatchStamps.Contains(k) Then
+			blfWatchStamps.Set(k, cur)
+			Continue
+		EndIf
+
+		Local known:String = blfWatchStamps.Get(k)
+
+		If cur = known Then
+
+' everything stable: I cancel any pending change
+			If blfWatchPendStamp.Contains(k) Then
+				blfWatchPendStamp.Remove(k)
+				blfWatchPendMs.Remove(k)
+			EndIf
+
+			Continue
+
+		EndIf
+
+' --- file gone (deleted or renamed outside the IDE)
+		If cur = BLF_STAMP_MISSING Then
+
+			blfWatchStamps.Set(k, cur)
+			blfWatchPendStamp.Remove(k)
+			blfWatchPendMs.Remove(k)
+
+			If blfWatchMarkOnDelete Then d.textchanged = 1
+
+			Continue
+
+		EndIf
+
+' --- the file changed: I wait for the stamp to stabilize, so I don't
+		'     read a file while another editor is writing it
+		If blfWatchPendStamp.Contains(k) And blfWatchPendStamp.Get(k) = cur Then
+
+			If now - blfWatchPendMs.Get(k) < BLF_WATCH_STABLE_MS Then Continue
+
+			blfWatchPendStamp.Remove(k)
+			blfWatchPendMs.Remove(k)
+
+			If RELOADMODE = 1 Then
+' RELOADMODE 1: I always ask with a window
+				toask.AddLast d
+			ElseIf d.textchanged = 1 Then
+				' RELOADMODE 0 but there are unsaved changes: I ask anyway
+				toask.AddLast d
+			Else
+				' RELOADMODE 0: automatic and silent reload
+				toreload.AddLast d
+			EndIf
+
+		Else
+
+			blfWatchPendStamp.Set(k, cur)
+			blfWatchPendMs.Set(k, now)
+
+		EndIf
+
+	Next
+
+' --- cleaning of the stamps of files no longer open
+	Local dead:= New List<String>
+
+	For Local k:= EachIn blfWatchStamps.Keys()
+		If Not alive.Contains(k) Then dead.AddLast k
+	Next
+
+	For Local k2:= EachIn dead
+		blfWatchStamps.Remove(k2)
+		blfWatchPendStamp.Remove(k2)
+		blfWatchPendMs.Remove(k2)
+	Next
+
+	blfWatchBusy = 0
+
+	' --- ricariche silenziose
+	For Local d:= EachIn toreload
+
+		BLFILES_ReloadDoc(d)
+
+	Next
+
+' --- reloads with confirmation. With blAskAsync = 1 they're only queued:
+	'     BLFILES_AskUpdate() then asks one request at a time, because on some
+	'     targets (Android) it can't block this loop.
+	For Local d:= EachIn toask
+		If blAskAsync Then
+			blfAskQueue.AddLast d
+			Continue
+		EndIf
+
+
+		Local msg:String
+
+		If d.textchanged = 1 Then
+
+			msg = "The file " + d.projname + " has been modified outside the IDE, but you have unsaved changes here." +
+				String.FromChar(10) + String.FromChar(10) +
+				"Reload it from disk and discard your changes?"
+
+		Else
+
+			msg = "The file " + d.projname + " has been modified outside the IDE." +
+				String.FromChar(10) + String.FromChar(10) +
+				"Reload it from disk?"
+
+		EndIf
+
+		If Confirm("FILE CHANGED", msg, False) Then
+
+			BLFILES_ReloadDoc(d)
+
+		Else
+
+' the user keeps their version: I align the stamp so it won't
+			' be asked again for the same change
+			BLFILES_WatchTouch(d.fullname)
+
+			d.textchanged = 1
+
+		EndIf
+
+	Next
+
+	' modal dialogs block the loop: I restart from the current time
+	If Not toask.IsEmpty() Then blfWatchLastMs = Millisecs()
+
+End Function
+
+' ---------------------------------------------------------------------------
+'  ASYNC RELOAD CONFIRMATIONS (for the targets where a modal dialog can't
+'  block, e.g. Android). Active only if blAskAsync = 1.
+' ---------------------------------------------------------------------------
+
+' 1 = queues the requests and asks them one at a time in BLFILES_AskUpdate();
+' 0 = immediate modal dialog (desktop behavior).
+Global blAskAsync:Int = 0
+
+Global blfAskQueue:= New List<blDocument>
+Global blfAskDoc:blDocument
+
+Function BLFILES_AskUpdate:Void()
+
+' --- answer to the currently pending document
+
+	If blfAskDoc <> Null And blRequest.Ready("blfreload") Then
+
+		Local d:blDocument = blfAskDoc
+		blfAskDoc = Null
+
+		If blRequest.ResultInt() = 1 Then
+
+			BLFILES_ReloadDoc(d)
+
+		Else
+
+' the user keeps their version: I align the stamp so it won't
+			' be asked again for the same change
+			BLFILES_WatchTouch(d.fullname)
+
+			d.textchanged = 1
+
+		EndIf
+
+		' the dialog stole time from the loop: restart from the current time
+		blfWatchLastMs = Millisecs()
+
+	EndIf
+
+' --- next question, if there isn't already an open requester
+
+	If blfAskDoc <> Null Then Return
+	If blfAskQueue.IsEmpty() Then Return
+	If blRequest.IsBusy() Then Return
+
+	Local d:blDocument = blfAskQueue.RemoveFirst()
+
+	Local msg:String
+
+	If d.textchanged = 1 Then
+
+		msg = "The file " + d.projname + " has been modified outside the IDE, but you have unsaved changes here." +
+			String.FromChar(10) + String.FromChar(10) +
+			"Reload it from disk and discard your changes?"
+
+	Else
+
+		msg = "The file " + d.projname + " has been modified outside the IDE." +
+			String.FromChar(10) + String.FromChar(10) +
+			"Reload it from disk?"
+
+	EndIf
+
+	If blRequest.AskConfirm("blfreload", "FILE CHANGED", msg, False) Then blfAskDoc = d
+
+End Function
+
+Function BLREQ_Update:Void()
+
+	blRequest.Update()
+
+	BLFILES_AskUpdate()
+
+	OpenProjectUpdate()
+
+	blTextbox.CloseBoxUpdate()
+
+End Function

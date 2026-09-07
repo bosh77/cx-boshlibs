@@ -1,0 +1,755 @@
+
+Import mojo2
+
+
+Import blTheme
+Import vortex3
+Import blDrawboxes
+Import blHooks
+Import blFuncs
+Import blSheets
+Import blWins
+Import blTextboxes
+Import blScreens
+
+'Global lmou, rmou
+'Global lhitmou, rhitmou
+'Global xmou, ymou, zmou
+'Global xmou2, ymou2
+'Global keypress
+'Global hook
+
+Global ScrX, ScrY, ScrW, ScrH
+Global ScrX2, ScrY2, ScrW2, ScrH2
+
+
+'Global ispre, ispre2, ispre3
+'
+''Global xmou, ymou
+''Global xmou2, ymou2
+'
+'Global touchhit
+'Global touchdown
+'Global touchrel
+'Global touchrep, touchrepcounter, touchrepon
+
+Global objsimg:Image
+
+
+
+
+'Global keywordbasic:String[] =["SetVarAddress", "LenStrings", "Imports", "IncludeFile", "IncludeBinary", "AddFileToDisk", "DiskProjectName",
+'	"ImportMusicPlayer", "ImportEffectPlayer", "CallPage", "JumpPage", "AsmLine", "Goto", "Gosub", "Return", "Dim", "At", "As", "Cls",
+'	"Screen", "SetPage", "DrawXBlock", "DrawBlock", "DrawNumber", "AddNumber", "GetAddressLine", "GetAddressVar", "GetDate", "GetTime", "GetDate", "GetFiles",
+'	"GetFileName", "SetPalette", "SetVDP", "Color", "Color=", "Locate", "Print", "Pset", "Circle", "Paint", "Line", "Copy", "Vpoke", "Poke", "SetVdp",
+'	"PutSprite", "For", "Step", "Next", "If", "EndIf", "Then", "Else", "DataB", "DataF", "DataI", "DataS", "ReadB", "ReadF", "ReadI",
+'	"ReadS", "Restore", "To", "DrawText", "DrawGrpText",
+'	"Byte", "Int", "Float", "String",
+'	"Tan", "Atn", "Cos", "Sin", "Sqr", "Abs", "Rnd", "Vpeek", "BASE", "Vdp", "Inp",
+'	"Stick", "Strig", "Pad", "Peek", "GetChar", "GetKey", "Val", "Asc", "Str", "Chr", "Hex", "Bin", "And", "Or", "Xor",
+'	"GetPoint", "SetScroll", "Sound", "LoadFont", "LoadMusic", "PlayMusic", "PauseMusic", "ResumeMusic", "StopMusic", "StartInterrupt", "StopInterrupt", "LoadEffect", "PlayEffect",
+'	"SaveData", "LoadData", "LoadDataToVram", "SaveDataFromVram", "CopyRamToVram", "CopyVramToRam", "ReadSector", "WriteSector", "GetCollision",
+'	"SetAttrSprites", "SetColorSprite", "SetSpriteAddress", "DrawAttrSprites", "DrawColorSprites", "DrawPatternSprites", "SetVarsPage", "SetPaletteFromLabel",
+'	"CheckSystem", "Width", "Out", "LineInput", "Input", "SetDiskErrorAddress"]
+	
+	
+'Global keywordpreproc:String[] =["CUSTOM", "TARGET", "MSXMOD", "VDPMOD", "TIME", "CHECKMODEL", "CHECKVDP", "CHECKRAM", "CHECKVRAM"]
+
+
+
+Class blGraphic
+	' vortex3 cameras used by the drawing areas (CxCAD). They're here and not in
+	' blDrawbox because the application code accesses them from blGraphic variables.
+	Field CAM:Camera
+
+	' Associated drawing area (CxCAD): if not Null, this blGraphic is a drawbox.
+	Field draw:blDataDraw
+	Field labels:blShortcut
+	Field vars:blShortcut
+	Field CAMcube:Camera
+
+	
+	
+	Field canv:Canvas
+	
+	Field objs:= New List<blGraphic>
+	
+	Field typeobj:Int
+	
+	'Field num
+	
+	Field typewin:Int
+	Field namewin:String
+	
+	Field parent:blGraphic
+	
+	Field xo1:Float
+	Field yo1:Float
+	Field xo2:Float
+	Field yo2:Float
+	
+	Field isonx
+	
+	Field iscreated
+	
+	'Field idlines:Int
+	'Field idline:Int[maxlines + 1]
+	
+	Field line
+	Field line2 = -1
+	
+	Field idcaret
+		
+	Field numlineinpage:Int
+	
+	Field lineerror:Int = -1
+	
+	Field lineevid = -1
+	Field lineevidcount
+	
+	
+	Field idstartsel:Int
+	Field idendsel:Int
+	
+	Field idselect1:Int
+	Field idselect2:Int
+	
+	
+	Field VSBar:blScrollBar
+	Field HSBar:blScrollBar
+	
+	
+	Field color
+	
+	Field hookx
+	Field hookw
+	
+	Field hookvalx
+	Field hookvalw
+	
+	
+	'Field cbox:blTextbox
+	
+	
+	Field leftsplitter:blSplitter
+	Field rightsplitter:blSplitter
+	Field topsplitter:blSplitter
+	Field bottomsplitter:blSplitter
+	
+	
+	Const minsize = 80
+	
+	Field leftlimit '= 80
+	Field toplimit '= 80
+	Field rightlimit '= 80
+	Field bottomlimit '= 80
+	
+	
+	Field linecaret
+	Field linecaret2
+	Field xposcaret
+	Field xposcaretsav
+	
+	Field saveline
+	Field textchangedit
+	
+	'	Field anchorLeft    ' Ancorato a sinistra finestra
+	'	Field anchorTop     ' Ancorato a top (sotto menu)
+	'	Field anchorRight   ' Ancorato a destra finestra
+	'	Field anchorBottom  ' Ancorato a bottom finestra
+	
+	'SCREEN
+	'	Field xsc:Int
+	'	Field ysc:Int
+	'	Field wsc:Int
+	'	Field hsc:Int
+	
+	'SHEETS
+	'	Field xsh:Int
+	'	Field ysh:Int
+	'	Field wsh:Int
+	'	Field hsh:Int
+	'
+	'	'WINS
+	'	Field xwi:Int
+	'	Field ywi:Int
+	'	Field wwi:Int
+	'	Field hwi:Int
+	'
+	'	'TEXTBOX/DRAWBOX/LISTBOX
+	'	Field xbo:Int
+	'	Field ybo:Int
+	'	Field wbo:Int
+	'	Field hbo:Int
+	
+	Field doc:blDocument
+	' 1 = text changed after last committed CXHL (editor only; see blTextboxes HL_CommitPendingHL).
+	Field hlParserSegsStale:Int
+	Field hlNeedViewport:Int = 0
+	Field hlForceViewport:Int = 0
+	Field hlLastEditMs:Int = 0
+	Field hlIdleId1:Int = -1
+	Field hlIdleId2:Int = -1
+	
+	' Caret-centered "spread" highlight state.
+	' Each frame highlights one line above and one below the anchor (the caret line)
+	' until both ends exit the visible viewport.
+	Field hlSpreadAnchorLn:Int = -1
+	Field hlSpreadAbove:Int = -1
+	Field hlSpreadBelow:Int = -1
+	Field hlSpreadLines:Int = -1
+	Field scRefreshDocPath:String = ""
+	Field scRefreshPending:Int = 0
+	Field scRefreshDirtyMs:Int = 0
+
+	' Document signature at the last successful RefreshShortcuts: used to avoid
+	' rebuilding the lists when the text hasn't changed. See RefreshShortcuts.
+	Field scRefreshDoneOnce:Int = 0
+	Field scRefreshSeenLen:Int = -1
+	Field scRefreshSeenLines:Int = -1
+	Field scRefreshSeenUr:Int = -1
+	Field scRefreshSeenPath:String = ""
+	
+	Field shortcutm:blShortcutManager
+	
+	Field bookmarks:blShortcut
+	Field functions:blShortcut
+	Field history:blShortcut
+	
+	Field histLines:Int[]
+	Field histLabels:String[]
+	Field histCount:Int
+	Field histVisitLastLn:Int = -1
+	
+	'	Field xca:Int
+	'	Field yca:Int
+	'	Field wca:Int
+	'	Field hca:Int
+	'
+	'	Field xp:Float
+	'	Field yp:Float
+	'	Field wp:Float
+	'	Field hp:Float
+	
+	'DOCUMENT
+	'Field filename:String
+	
+	Field leftshsplitter:blSheetsSplitter
+	Field rightshsplitter:blSheetsSplitter
+	Field topshsplitter:blSheetsSplitter
+	Field bottomshsplitter:blSheetsSplitter
+	
+	
+	'SHORTCUTS
+	Field idstartshortcut
+	Field numofshortcut
+
+	Const maxshortcuts = 40000
+	
+	Field indexshortcut:Int[maxshortcuts]
+	Field lungshortcut:Int[maxshortcuts]
+	Field typeshortcut:Int[maxshortcuts]
+	Field lineshortcut:Int[maxshortcuts]
+	
+	Field openshortcut:Int[4]
+	Field nameshortcut:String[4]
+	
+	
+	Method CreateSplitters()
+	End Method
+	
+	
+	Method Draw()
+	End
+	Method Update()
+	End
+	
+	Method AddSheet(x1:Float, y1:Float, x2:Float, y2:Float)
+	End
+
+	Method DrawSheet(canv:Canvas, x1, y1, x2, y2)
+	End
+	Method UpdateSheet(x1, y1, x2, y2)
+	End
+	
+	Method SetLAY(M)
+	End
+	Method AddWin(x1:Float, y1:Float, x2:Float, y2:Float, co, tw, winname:String)
+	End
+	
+	Method DrawWin(canv:Canvas, x1, y1, x2, y2)
+	End
+	Method UpdateWin(x1, y1, x2, y2)
+	End
+
+	Method TextSelected:String() Property
+	End
+	Method GetCursorLine()
+	End
+	' --- drawing areas (used by CxCAD) ---
+
+	Method DrawDrawBox(canv:Canvas, x1, y1, x2, y2)
+	End
+
+	Method UpdateDrawBox(x1, y1, x2, y2)
+	End
+
+	Method UpdateDrawBoxOne(x1, y1, x2, y2)
+	End
+
+	Method DrawTextBox(canv:Canvas, x1, y1, x2, y2)
+	End
+	Method UpdateTextBox(x1, y1, x2, y2)
+	End
+	Method UpdateTextBoxOne(x1, y1, x2, y2)
+	End
+	Method ReplaceString(x1, y1, x2, y2)
+	End
+	Method ReplaceAllString(x1, y1, x2, y2)
+	End
+	Method CaretOutOfScreen(x1, y1, x2, y2)
+	End
+	Method SaveStateDoc1(ur:URstate)
+	End
+	Method SaveStateDoc2(ur:URstate)
+	End
+	Method CloseBox(sh:blSheet)
+	End
+	Method CloseBoxNoAsk(sh:blSheet)
+	End
+	Method AddText(tx:String, col)
+	End
+	Method Undo(xxca, yyca, wwca, hhca)
+	End
+	Method Redo(xxca, yyca, wwca, hhca)
+	End
+	Method Taglia(xxca, yyca, wwca, hhca)
+	End
+	Method Copia()
+	End
+	Method Incolla(xxca, yyca, wwca, hhca)
+	End
+	Method Forward(xxca, yyca, wwca, hhca)
+	End
+	Method Backward(xxca, yyca, wwca, hhca)
+	End
+	Method GoToLine(ln)
+	End
+	Method MakeLines()
+	End
+	Method MakeLines2()
+	End
+	Method AC_Close()
+	End
+	Method WordOnCaret:String()
+		Return ""
+	End
+	Method DOC_Close()
+	End
+	Method DOC_Show(nm:String, scope:String, txt:String)
+	End
+	Method DOC_IsShowing:Int(nm:String)
+		Return 0
+	End
+
+	Method SetStartValues()
+	End
+	'Function MakeLinesAll()
+	'End
+	
+	Method DrawBar(canv:Canvas) ' docu:blDocument, x1, y1, x2, y2)
+	End
+	Method UpdateBar() 'docu:blDocument, x1, y1, x2, y2)
+	End
+	
+	Method UpdateMouseWheel()
+	End
+	
+End
+
+Class blScrollBar Extends blGraphic
+
+	Global scrollbars:= New List<blGraphic>
+	
+	'Field fn:Myfontnew
+	
+	Field minv, maxv
+	
+	Field value:Float
+	
+	Field obar:float
+	
+	Field hookon
+	Field hooky:Float
+	
+	Field stp:Float
+	
+	Field orient '0-VERT  1-ORIZ
+	
+	Field xb1, yb1, wb1, hb1
+	
+	'Method New(x:float, y:float, w:float, h:float, co1, MinVal, MaxVal, Parent:blGraphic, Value:float = 0, Stp:float = 1, a:float = 1) ', f:Myfontnew, txt:String, co1, co2, ju, a:Float = 1, sc:float = 1)
+	Method New(x:float, y:float, w:float, h:float, MinVal, MaxVal, Stp, orie)
+	
+		Self.typeobj = 2
+	
+		'Self.parent = Parent
+		
+		Self.minv = MinVal
+		
+		Self.maxv = MaxVal
+		
+		Self.stp = Stp
+		
+				
+		Self.xb1 = x
+		Self.yb1 = y
+		Self.wb1 = w
+		Self.hb1 = h
+	
+		Self.orient = orie
+		
+		'Self.a = a
+		
+		'Self.r = r
+		'Self.g = g
+		'Self.b = b
+		'Self.txt = txt
+		
+		'Self.col1 = co1
+		'Self.col2 = co2
+	
+		'Self.ju = ju
+		
+		'Self.a = a
+		
+		'Self.sc = sc
+		
+		
+		'Self.parent = d
+		
+		'draws.AddLast(Self)
+		'AddToList Self
+		
+		scrollbars.AddLast(Self)
+		
+		
+	End Method
+	
+	Method DrawBar(canv:Canvas) ', docu:blDocument, x1, y1, w1, h1)
+	
+		
+		'Local xx, yy, xb
+				
+		'If docu Then xb = docu.ww2 + 6
+		
+		If obar < 0 Then obar = 0
+		
+		
+		IdeUiSetCanvas canv, IDEUI_SCROLL_TRACK
+		canv.DrawRect(xb1, yb1, wb1 - 2, hb1 - 2)
+				
+		canv.SetColor 1, 1, 1
+		
+		Select orient
+		
+			Case 0
+		
+				'xx = x1 + x2 - wb1
+				'yy = y1 + y2 - 20
+				
+				'If obar > hb1 - 20 Then obar = hb1 - 20
+				
+				canv.DrawImageRect(objsimg, xb1, yb1, 80, 0, 20, 20) ', 0, 0.5, 0.5)
+				canv.DrawImageRect(objsimg, xb1, yb1 + hb1 - 20, 100, 0, 20, 20) ', 0, 0.5, 0.5)
+				canv.DrawImageRect(objsimg, xb1 + 2, yb1 + 20 + obar, 120, 0, 20, 30) ', 0, 0.5, 0.5)
+	
+			Case 1
+		
+				'xx = x1 + xb '+ x2 - wb1
+				'yy = y1 + y2 - 20
+				
+				'If obar > wb1 - 20 Then obar = wb1 - 20
+				
+				canv.DrawImageRect(objsimg, xb1, yb1, 40, 0, 20, 20) ', 0, 0.5, 0.5)
+				canv.DrawImageRect(objsimg, xb1 + wb1 - 20, yb1, 60, 0, 20, 20) ', 0, 0.5, 0.5)
+				canv.DrawImageRect(objsimg, xb1 + 20 + obar, yb1 + 2, 40, 20, 30, 20) ', 0, 0.5, 0.5)
+
+				
+		End
+	
+		
+	End Method
+	
+	Method UpdateBar() 'docu:blDocument, x1, y1, x2, y2)
+	
+		'Local xx = xb1 ' + w
+		'Local yy = yb1 + 20 + obar
+							
+		
+		Select orient
+				
+			Case 0
+		
+				If IsTouchHit(xb1, yb1 + 20 + obar, 20, 30) Then hookon = 1; hooky = ymou - obar
+		
+				Local tr = 0
+				
+				If IsTouchRep(xb1, yb1, 20, 20) Then obar = obar - stp; tr = 1
+		
+				If IsTouchRep(xb1, yb1 + hb1 - 20, 20, 20) Then obar = obar + stp; tr = 1 '; Print stp
+		
+				'Print scrolly * stp
+		
+				'If IsOnRect(xb1, yb1, wb1, hb1) Then ybar = ybar - zmou * stp
+		
+				If hookon Then obar = ymou - hooky
+				
+				'If hookon or tr Then
+		
+				CheckOBARlimits
+		
+				If hookon or tr Then
+				
+					SetValueFromOBAR
+			
+				EndIf
+				
+				If value < 0 Then value = 0
+				
+				'If value > maxv Then value = maxv
+				
+				'Print maxv
+				'Print value
+				
+			Case 1
+				
+				If IsTouchHit(xb1 + 20 + obar, yb1, 20, 30) Then hookon = 1; hooky = xmou - obar
+		
+				Local tr = 0
+				
+				If IsTouchRep(xb1, yb1, 20, 20) Then obar = obar - stp; tr = 1
+		
+				If IsTouchRep(xb1 + wb1 - 20, yb1, 20, 20) Then obar = obar + stp; tr = 1 '; Print stp
+		
+				'Print scrolly * stp
+		
+				'If IsOnRect(xb1, yb1, wb1, hb1) Then ybar = ybar - zmou * stp
+		
+				If hookon or tr Then obar = xmou - hooky
+		
+				'If hookon or tr Then
+				
+				CheckOBARlimits
+		
+				If obar < 0 Then obar = 0
+				
+				'If hookon or tr Then
+				
+				SetValueFromOBAR
+				
+				If value < 0 Then value = 0
+				
+				'If value > maxv Then value = maxv
+				
+				'EndIf
+				
+				
+		End
+				
+		If touchrel or (touchdown = 0 and touchhit = 0) Then hookon = 0
+		
+		
+	End Method
+	
+	Method CheckOBARlimits()
+		
+		Select orient
+				
+			Case 0
+			
+				If obar < 0 Then obar = 0
+		
+				Local maxy = hb1 - 72
+				If obar > maxy Then obar = maxy
+				
+			Case 1
+			
+				If obar < 0 Then obar = 0
+		
+				Local maxx = wb1 - 72
+				If obar > maxx Then obar = maxx
+			
+		End
+				
+	End
+	
+	Method SetValueFromOBAR()
+		
+		Select orient
+				
+			Case 0
+			
+				Local hh:Float = hb1 - 72
+				value = (obar + 0.0001) * maxv / Float(hh)
+				
+			Case 1
+			
+				Local ww:Float = wb1 - 72
+				value = obar / Float(ww) * maxv
+				
+		End
+			
+	End
+	
+	Method SetOBARFromValue()
+	
+		Select orient
+		
+			Case 0
+			
+				Local hh = hb1 - 72
+				'obar = Float(value) * Float(hh) / Float(maxv)
+				obar = Float(value + 0.0001) * Float(hh) / Float(maxv)
+			
+			Case 1
+		
+				Local ww = wb1 - 72
+				'obar = Float(value) * Float(ww) / Float(maxv)
+				obar = Float(value) * Float(ww) / Float(maxv)
+			
+		End
+		
+		CheckOBARlimits
+		SetValueFromOBAR
+		
+		'If obar < 0 Then obar = 0
+						
+	End Method
+	
+End
+	
+
+
+
+
+Function GetAbsScrX:Int(v:Float)
+	
+	If v < 0 Then
+		
+		Return Abs(v)
+		
+	Else
+		
+		Return DeviceWidth * v
+		
+	EndIf
+
+End Function
+
+Function GetAbsScrY1:Int(v:Float)
+	
+	If v < 0 Then
+		
+		Return Abs(v)
+		
+	Else
+		
+		Return DeviceHeight * v
+		
+	EndIf
+
+End Function
+Function GetAbsScrY2:Int(v:Float)
+	
+	If v < 0 Then
+		
+		Return DeviceHeight + v
+		
+	Else
+		
+		Return DeviceHeight * v
+		
+	EndIf
+
+End Function
+
+Function GetAbsX:Int(v:Float)
+	
+	Return ScrW * v
+
+End Function
+
+Function GetRelX:Float(V)
+
+	Return Float(V) / Float(ScrW)
+	
+End Function
+
+Function GetAbsY:Int(v:Float)
+
+	Return ScrH * v
+
+End Function
+
+Function GetRelY:Float(V)
+
+	Return Float(V) / Float(ScrH)
+	
+End Function
+
+Function GetAbsW:Int(v:Float)
+	
+	Return ScrW * v
+
+End Function
+
+Function GetAbsH:Int(v:Float)
+
+	Return ScrH * v
+
+End Function
+
+Function MySetColor(canv:Canvas, r, g, b)
+	
+	canv.SetColor(r / 255.0, g / 255.0, b / 255.0)
+	
+End
+	
+Function MySetColor(canv:Canvas, c)
+	
+	Local r2:Float = ( (c shr 16) & 255) / 255.0
+	Local g2:Float = ( (c shr 8) & 255) / 255.0
+	Local b2:Float = (c & 255) / 255.0
+		
+	canv.SetColor(r2, g2, b2)
+	
+End
+
+'Function GetAbsX:Int(v:Float)
+'
+'	If v < 0 Then
+'
+'		Return Abs(v)
+'
+'	Else
+'
+'		Return ScrW * v
+'
+'	EndIf
+'
+'End Function
+'
+'Function GetAbsY:Int(v:Float)
+'
+'	If v < 0 Then
+'
+'		Return Abs(v)
+'
+'	Else
+'
+'		Return ScrH * v
+'
+'	EndIf
+'
+'End Function

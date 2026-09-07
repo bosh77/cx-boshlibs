@@ -1,0 +1,1459 @@
+
+
+Import blObjs3D
+Import blHooks
+Import blDocBase
+Import blFuncs
+Import blTheme
+Import vortex3
+Import vortex3.src.math3d
+
+Import brl.requesters
+
+Import blGraphics
+
+Import os
+
+' Orientation cube textures.
+Import "data/cube_top.png"
+Import "data/cube_bottom.png"
+Import "data/cube_front.png"
+Import "data/cube_back.png"
+Import "data/cube_left.png"
+Import "data/cube_right.png"
+
+
+
+
+Class blDrawbox Extends blGraphic
+	
+	Field hookcamcube:Int
+	Field hookpan:Int
+	Field hookeditvertex:Int
+	Field hookeditface:Int
+	Field hookeditobj:Int = -1
+	Field hookeditvert:Int = -1
+	Field camtargetx:Float
+	Field camtargety:Float
+	Field camtargetz:Float
+	
+	Method New(filnam:String)
+		
+		For Local o1_any:= EachIn blSheet.docum
+			Local o1:= blDataDraw(o1_any)
+			If o1 = Null Then Continue
+		
+			If o1.fullname = filnam Then
+				
+				draw = o1
+				
+				NOMEWORLD = filnam
+				CreateDrawboxData
+				
+				'PROVAUTF8
+				
+				Return
+				
+			EndIf
+			
+		Next
+	
+		Local D:= New blDataDraw(filnam)
+		
+		blSheet.docum.AddLast D
+		
+		draw = D
+					
+		
+		'MakeLines
+		NOMEWORLD = filnam
+		CreateDrawboxData
+	
+		
+		
+		
+	End
+	
+	Method New(bldoc:blDataDraw)
+				
+		draw = bldoc
+	
+		NOMEWORLD = draw.fullname
+		CreateDrawboxData
+				
+		'PROVAUTF8
+		
+	End
+	
+	Method New()
+	
+		'If typewin = 3 Then Print "!!"
+		
+		
+		Local D:= New blDataDraw()
+				
+		draw = D
+	
+		'doc.Text = "X" + invio
+		
+		'Print "X"
+		
+		NOMEWORLD = draw.fullname
+		CreateDrawboxData
+		
+		
+	End
+
+
+	Method CreateDrawboxData()
+		
+	
+		VSBar = New blScrollBar(0, 0, 20, 100, 0, 100, 5, 0)
+		HSBar = New blScrollBar(0, 0, 100, 20, 0, 100, 5, 1)
+			
+		'Return
+		
+		CAM = New Camera
+		CAM.Viewport(0, 0, DeviceWidth, DeviceHeight)
+		CAM.BackgroundColor = vortex3.color.Color.RGB(105, 15, 105)
+		CAM.Position(0, 0, 150)
+		camtargetx = 0 ; camtargety = 0 ; camtargetz = 0
+		CAM.LookAt(camtargetx, camtargety, camtargetz)
+		
+		
+		
+		shortcutm = New blShortcutManager
+		labels = shortcutm.AddShortcut("Objects 3D", $70c0f0)
+		labels.scstate = 1
+		If draw.sclist = Null Then draw.sclist = New blShortcutList
+	
+		
+		'PROVA
+		If draw.oggetti.Length = 0 Then
+			Local sc:Float = 0.1
+			Local mdl:Model
+			'If draw.fullname.EndsWith("jungle") = False Then
+			If draw.fullname.EndsWith("jungle") = False and 1 = 2 Then
+				'mdl = New Model(Mesh.Load("tavolo.msh.dat"))
+				mdl = New Model(Mesh.Load("player/Meshy_AI_Crea_semplice_calciat_0626180052_texture.msh.dat"))
+				'mdl = New Model(Mesh.Load("player/Meshy_AI_Crea_semplice_calciat_0626180052_texture_unwrapped.msh.dat"))
+				sc = 60
+			Else
+				mdl = New Model(Mesh.CreateCube)
+				sc = 0.0050
+			EndIf
+			mdl.Position(0, 0, 0)
+			mdl.Scale(sc, sc, sc)
+			Local o:Model3D = New Model3D
+			o.nome = "Default Model"
+			o.modello = mdl
+			draw.oggetti = draw.oggetti.Resize(1)
+			draw.oggetti[0] = o
+		EndIf
+		
+		
+		NOMEWORLD = "CubeView"
+		CAMcube = New Camera
+		CAMcube.Viewport(0, 0, DeviceWidth, DeviceHeight)
+		CAMcube.BackgroundColor = vortex3.color.Color.RGB(15, 15, 105)
+		CAMcube.Position(0, 0, 30)
+		
+		CAMcube.LookAt(0, 0, 0)
+		
+		
+		'Print "X"
+		
+	End
+	
+	Method GetLastModel3D:Model3D()
+		If draw = Null Then Return Null
+		For Local i:Int = draw.oggetti.Length - 1 To 0 Step -1
+			Local o:Model3D = Model3D(draw.oggetti[i])
+			If o And o.modello Then Return o
+		Next
+		Return Null
+	End
+	
+	Method SetCamTarget(tx:Float, ty:Float, tz:Float)
+		camtargetx = tx ; camtargety = ty ; camtargetz = tz
+		If CAM Then CAM.LookAt(camtargetx, camtargety, camtargetz)
+	End
+	
+	Method HasOtherOpenDrawSameFile:Int()
+		If draw = Null Then Return 0
+		Local thisfile:String = draw.fullname.Replace("\", "/")
+		If thisfile = "" Then Return 0
+		For Local sh2:= EachIn blSheet.allsheets
+			For Local box2:= EachIn sh2.childsboxes
+				If box2 <> Self And box2.draw Then
+					If box2.draw.fullname.Replace("\", "/") = thisfile Then Return 1
+				EndIf
+			Next
+		Next
+		Return 0
+	End
+	
+	Method Discard3DResources(discardObjects:Int)
+		If CAM Then CAM.Discard(); CAM = Null
+		If CAMcube Then CAMcube.Discard(); CAMcube = Null
+		If discardObjects = 0 Or draw = Null Then Return
+		
+		For Local i:Int = 0 Until draw.oggetti.Length
+		
+			Local m3:Model3D = Model3D(draw.oggetti[i])
+		
+			If m3 Then
+				DiscardModel3DWire(m3)
+				If m3.modello Then m3.modello.Discard()
+				Continue
+			EndIf
+		
+			Local l3:Line3D = Line3D(draw.oggetti[i])
+		
+			If l3 Then If l3.modello Then l3.modello.Discard(); Continue
+		
+			Local im3:Image3D = Image3D(draw.oggetti[i])
+		
+			If im3 Then If im3.modello Then im3.modello.Discard(); Continue
+		
+			Local tx3:Text3D = Text3D(draw.oggetti[i])
+		
+			If tx3 Then If tx3.modello Then tx3.modello.Discard(); Continue
+		
+			Local c3:Circle3D = Circle3D(draw.oggetti[i])
+		
+			If c3 Then If c3.modello Then c3.modello.Discard()
+			
+		Next
+		draw.oggetti = New Obj3D[0]
+	End
+	
+	Method PanViewByMouse(dx:Float, dy:Float)
+		If CAM = Null Then Return
+		Local vx:Float = CAM.X - camtargetx
+		Local vy:Float = CAM.Y - camtargety
+		Local vz:Float = CAM.Z - camtargetz
+		Local dist:Float = Sqrt(vx * vx + vy * vy + vz * vz)
+		If dist < 0.001 Then Return
+		Local upp:Float = 2.0 * dist * Tan(CAM.FovY * 0.5) / Float(Max(1, CAM.ViewportHeight))
+		Local rpp:Float = upp * CAM.AspectRatio
+		Local q:Float[4]
+		Local vr:Float[4]
+		Local vu:Float[4]
+		QuatSetEuler(CAM.Pitch, CAM.Yaw, CAM.Roll, q)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 1, 0, 0, vr)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 0, 1, 0, vu)
+		Local ox:Float = vr[0] * (-dx * rpp) + vu[0] * (dy * upp)
+		Local oy:Float = vr[1] * (-dx * rpp) + vu[1] * (dy * upp)
+		Local oz:Float = vr[2] * (-dx * rpp) + vu[2] * (dy * upp)
+		CAM.Position(CAM.X + ox, CAM.Y + oy, CAM.Z + oz)
+		SetCamTarget(camtargetx + ox, camtargety + oy, camtargetz + oz)
+	End
+	
+	Method GetEditableModelIndex:Int()
+		If draw = Null Then Return -1
+		If labels And labels.scidsel >= 0 And labels.scidsel < labels.sclist.sclistline.Length
+			Local oi:Int = labels.sclist.sclistline[labels.scidsel]
+			Local m:Model3D = Model3D(draw.oggetti[oi])
+			If oi >= 0 And m And m.editmesh Then Return oi
+		EndIf
+		For Local i:Int = 0 Until draw.oggetti.Length
+			Local m:Model3D = Model3D(draw.oggetti[i])
+			If m And m.editmesh Then Return i
+		Next
+		Return -1
+	End
+	
+	Method HookEditableVertex:Int(x1:Int, y1:Int)
+		Local oi:Int = GetEditableModelIndex()
+		If oi < 0 Or CAM = Null Then Return 0
+		Local m:Model3D = Model3D(draw.oggetti[oi])
+		Local best:Int = -1; Local bestd:Float = 400
+		For Local i:Int = 0 Until m.editmesh.verts.Length
+			Local v:EditVertex = m.editmesh.verts[i]
+			If v = Null Or v.hidden Then Continue
+			Local pt:Float[] = [m.x1 + v.x, m.y1 + v.y, m.z1 + v.z]
+			CAM.Project(pt)
+			Local dx:Float = xmou - (x1 + 5 + CAM.ProjectedX)
+			Local dy:Float = ymou - (y1 + 2 + CAM.ProjectedY)
+			Local d2:Float = dx * dx + dy * dy
+			If d2 < bestd Then bestd = d2; best = i
+		Next
+		If best < 0 Then Return 0
+		m.ClearSelection(); m.selkind = 1; m.selindex = best; m.editmesh.selkind = 1; m.editmesh.selindex = best; m.editmesh.verts[best].selected = 1
+		hookeditvertex = 1; hookeditobj = oi; hookeditvert = best; draw.drawchanged = 1
+		Return 1
+	End
+	
+	Method GetEditableFaceForVertex:EditFace(m:Model3D, vid:Int)
+		If m = Null Or m.editmesh = Null Then Return Null
+		For Local fi:Int = 0 Until m.editmesh.faces.Length
+			Local f:EditFace = m.editmesh.faces[fi]
+			If f = Null Or f.hidden Then Continue
+			For Local i:Int = 0 Until f.verts.Length
+				If f.verts[i] = vid Then Return f
+			Next
+		Next
+		Return Null
+	End
+	
+	Method GetEditableFaceIndexForTriangle:Int(m:Model3D, tri:Int)
+		If m = Null Or m.editmesh = Null Or tri < 0 Then Return -1
+		Local acc:Int = 0
+		For Local fi:Int = 0 Until m.editmesh.faces.Length
+			Local f:EditFace = m.editmesh.faces[fi]
+			If f = Null Or f.hidden Or f.verts.Length < 3 Then Continue
+			Local nt:Int = f.verts.Length - 2
+			If tri >= acc And tri < acc + nt Then Return fi
+			acc += nt
+		Next
+		Return -1
+	End
+	
+	Method HookEditableFace:Int(x1:Int, y1:Int)
+		Local oi:Int = GetEditableModelIndex()
+		If oi < 0 Or CAM = Null Then Return 0
+		Local m:Model3D = Model3D(draw.oggetti[oi])
+		If m = Null Or m.editmesh = Null Or m.modello = Null Then Return 0
+		If Not World.CameraPick(CAM, xmou - (x1 + 5), ymou - (y1 + 2)) Then Return 0
+		If World.PickedEntity() <> m.modello Then Return 0
+		Local fi:Int = GetEditableFaceIndexForTriangle(m, World.PickedTriangle())
+		If fi < 0 Then Return 0
+		m.ClearSelection(); m.selkind = 3; m.selindex = fi; m.editmesh.selkind = 3; m.editmesh.selindex = fi; m.editmesh.faces[fi].selected = 1
+		hookeditface = 0; hookeditobj = -1; hookeditvert = -1
+		draw.drawchanged = 1
+		Return 1
+	End
+	
+	Method GetSelectedEditableFace:EditFace(m:Model3D)
+		If m = Null Or m.editmesh = Null Then Return Null
+		If m.selkind <> 3 Or m.selindex < 0 Or m.selindex >= m.editmesh.faces.Length Then Return Null
+		Return m.editmesh.faces[m.selindex]
+	End
+	
+	Method MoveHookedEditableFace(dx:Float, dy:Float)
+		If hookeditobj < 0 Or CAM = Null Then Return
+		Local m:Model3D = Model3D(draw.oggetti[hookeditobj]); If m = Null Or m.editmesh = Null Then Return
+		Local f:EditFace = GetSelectedEditableFace(m); If f = Null Or f.verts.Length < 3 Then Return
+		Local v0:EditVertex = m.editmesh.verts[f.verts[0]]
+		Local v1:EditVertex = m.editmesh.verts[f.verts[1]]
+		Local v2:EditVertex = m.editmesh.verts[f.verts[2]]
+		If v0 = Null Or v1 = Null Or v2 = Null Then Return
+		Local cx:Float = 0; Local cy:Float = 0; Local cz:Float = 0
+		For Local i:Int = 0 Until f.verts.Length
+			Local v:EditVertex = m.editmesh.verts[f.verts[i]]
+			If v Then cx += v.x; cy += v.y; cz += v.z
+		Next
+		cx /= f.verts.Length; cy /= f.verts.Length; cz /= f.verts.Length
+		Local ddx:Float = CAM.X - (m.x1 + cx)
+		Local ddy:Float = CAM.Y - (m.y1 + cy)
+		Local ddz:Float = CAM.Z - (m.z1 + cz)
+		Local dist:Float = Sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
+		If dist < 0.001 Then dist = 100
+		Local upp:Float = 2.0 * dist * Tan(CAM.FovY * 0.5) / Float(Max(1, CAM.ViewportHeight)); Local rpp:Float = upp * CAM.AspectRatio
+		Local ux:Float = v1.x - v0.x; Local uy:Float = v1.y - v0.y; Local uz:Float = v1.z - v0.z
+		Local vx2:Float = v2.x - v0.x; Local vy2:Float = v2.y - v0.y; Local vz2:Float = v2.z - v0.z
+		Local nx:Float = uy * vz2 - uz * vy2; Local ny:Float = uz * vx2 - ux * vz2; Local nz:Float = ux * vy2 - uy * vx2
+		Local nl:Float = Sqrt(nx * nx + ny * ny + nz * nz); If nl < 0.00001 Then Return
+		nx /= nl; ny /= nl; nz /= nl
+		Local q:Float[4]; Local vr:Float[4]
+		QuatSetEuler(CAM.Pitch, CAM.Yaw, CAM.Roll, q)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 1, 0, 0, vr)
+		Local ax0:Float = vr[0]; Local ax1:Float = vr[1]; Local ax2:Float = vr[2]
+		Local da:Float = ax0 * nx + ax1 * ny + ax2 * nz
+		ax0 -= nx * da; ax1 -= ny * da; ax2 -= nz * da
+		Local al:Float = Sqrt(ax0 * ax0 + ax1 * ax1 + ax2 * ax2); If al < 0.00001 Then Return
+		ax0 /= al; ax1 /= al; ax2 /= al
+		Local ay0:Float = ny * ax2 - nz * ax1; Local ay1:Float = nz * ax0 - nx * ax2; Local ay2:Float = nx * ax1 - ny * ax0
+		Local ox:Float = ax0 * (-dx * rpp) + ay0 * (dy * upp)
+		Local oy:Float = ax1 * (-dx * rpp) + ay1 * (dy * upp)
+		Local oz:Float = ax2 * (-dx * rpp) + ay2 * (dy * upp)
+		For Local i:Int = 0 Until f.verts.Length
+			Local v:EditVertex = m.editmesh.verts[f.verts[i]]
+			If v Then v.x += ox; v.y += oy; v.z += oz
+		Next
+		m.editmesh.dirty = 1; RebuildEditableModel3D(m); draw.drawchanged = 1
+	End
+	
+	Method MoveHookedEditableVertex(dx:Float, dy:Float)
+		If hookeditobj < 0 Or hookeditvert < 0 Or CAM = Null Then Return
+		Local m:Model3D = Model3D(draw.oggetti[hookeditobj]); If m = Null Or m.editmesh = Null Then Return
+		Local v:EditVertex = m.editmesh.verts[hookeditvert]; If v = Null Then Return
+		Local px:Float = m.x1 + v.x; Local py:Float = m.y1 + v.y; Local pz:Float = m.z1 + v.z
+		Local dist:Float = Sqrt((CAM.X - px) * (CAM.X - px) + (CAM.Y - py) * (CAM.Y - py) + (CAM.Z - pz) * (CAM.Z - pz))
+		If dist < 0.001 Then dist = 100
+		Local upp:Float = 2.0 * dist * Tan(CAM.FovY * 0.5) / Float(Max(1, CAM.ViewportHeight)); Local rpp:Float = upp * CAM.AspectRatio
+		Local q:Float[4]; Local vr:Float[4]; Local vu:Float[4]
+		QuatSetEuler(CAM.Pitch, CAM.Yaw, CAM.Roll, q)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 1, 0, 0, vr)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 0, 1, 0, vu)
+		Local ax0:Float = vr[0]; Local ax1:Float = vr[1]; Local ax2:Float = vr[2]
+		Local ay0:Float = vu[0]; Local ay1:Float = vu[1]; Local ay2:Float = vu[2]
+		Local f:EditFace = GetEditableFaceForVertex(m, hookeditvert)
+		If f And f.verts.Length >= 3
+			Local v0:EditVertex = m.editmesh.verts[f.verts[0]]
+			Local v1:EditVertex = m.editmesh.verts[f.verts[1]]
+			Local v2:EditVertex = m.editmesh.verts[f.verts[2]]
+			If v0 And v1 And v2
+				Local ux:Float = v1.x - v0.x; Local uy:Float = v1.y - v0.y; Local uz:Float = v1.z - v0.z
+				Local vx2:Float = v2.x - v0.x; Local vy2:Float = v2.y - v0.y; Local vz2:Float = v2.z - v0.z
+				Local nx:Float = uy * vz2 - uz * vy2
+				Local ny:Float = uz * vx2 - ux * vz2
+				Local nz:Float = ux * vy2 - uy * vx2
+				Local nl:Float = Sqrt(nx * nx + ny * ny + nz * nz)
+				If nl > 0.00001
+					nx /= nl; ny /= nl; nz /= nl
+					Local da:Float = ax0 * nx + ax1 * ny + ax2 * nz
+					ax0 -= nx * da; ax1 -= ny * da; ax2 -= nz * da
+					Local al:Float = Sqrt(ax0 * ax0 + ax1 * ax1 + ax2 * ax2)
+					If al > 0.00001
+						ax0 /= al; ax1 /= al; ax2 /= al
+						ay0 = ny * ax2 - nz * ax1
+						ay1 = nz * ax0 - nx * ax2
+						ay2 = nx * ax1 - ny * ax0
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+		v.x += ax0 * (-dx * rpp) + ay0 * (dy * upp)
+		v.y += ax1 * (-dx * rpp) + ay1 * (dy * upp)
+		v.z += ax2 * (-dx * rpp) + ay2 * (dy * upp)
+		m.editmesh.dirty = 1; RebuildEditableModel3D(m); draw.drawchanged = 1
+	End
+	
+	Method GetObj3DName:String(o:Obj3D, idx:Int)
+		If o = Null Then Return "Obj3D " + (idx + 1)
+		If o.nome <> "" Then Return o.nome
+		If Model3D(o) Then Return "Model3D " + (idx + 1)
+		If Image3D(o) Then Return "Image3D " + (idx + 1)
+		If Text3D(o) Then Return "Text3D " + (idx + 1)
+		If Line3D(o) Then Return "Line3D " + (idx + 1)
+		If Circle3D(o) Then Return "Circle3D " + (idx + 1)
+		Return "Obj3D " + (idx + 1)
+	End
+	
+	Method IsGridLine:Int(o:Obj3D)
+		Local li:Line3D = Line3D(o)
+		If li And li.isgrid Then Return 1
+		Return 0
+	End
+	
+	Method IsGridVisible:Int()
+		If draw = Null Then Return 0
+		For Local i:Int = 0 Until draw.oggetti.Length
+			Local li:Line3D = Line3D(draw.oggetti[i])
+			If li And li.isgrid Then
+				If li.modello And li.modello.Visible Then Return 1 Else Return 0
+			EndIf
+		Next
+		Return 0
+	End
+	
+	Method ToggleGridVisible()
+		If draw = Null Then Return
+		Local nv:Int = 1 - IsGridVisible()
+		For Local i:Int = 0 Until draw.oggetti.Length
+			Local li:Line3D = Line3D(draw.oggetti[i])
+			If li And li.isgrid And li.modello Then li.modello.Visible = (nv <> 0)
+		Next
+		draw.drawchanged = 1
+	End
+	
+	Method HandleShortcutSelection(item:Int)
+		If labels = Null Then Return
+		If item < 0 Or item >= labels.sclist.sclistline.Length Then Return
+		Local objid:Int = labels.sclist.sclistline[item]
+		If objid = -1000 Then
+			ToggleGridVisible()
+		Else
+			labels.scidsel = item
+		EndIf
+	End
+	
+	Method RefreshObj3DLists()
+		If draw = Null Then Return
+		If labels = Null Then Return
+		If draw.sclist = Null Then draw.sclist = New blShortcutList
+		labels.sclist.ClearList
+		draw.sclist.ClearList
+		Local hasgrid:Int = 0
+		For Local i:Int = 0 Until draw.oggetti.Length
+			If IsGridLine(draw.oggetti[i]) Then hasgrid = 1
+		Next
+		If hasgrid Then
+			If IsGridVisible() Then labels.sclist.AddShortcut("Grid [ON]", -1000, "") Else labels.sclist.AddShortcut("Grid [OFF]", -1000, "")
+		EndIf
+		For Local i:Int = 0 Until draw.oggetti.Length
+			Local o:Obj3D = draw.oggetti[i]
+			If IsGridLine(o) Then Continue
+			Local onm:String = GetObj3DName(o, i)
+			labels.sclist.AddShortcut(onm, i, "")
+		Next
+		If labels.sclist.sclistline.Length = 0 Then labels.scidsel = -1; Return
+		If labels.scidsel < 0 Or labels.scidsel >= labels.sclist.sclistline.Length Or labels.sclist.sclistline[labels.scidsel] < 0 Then
+			labels.scidsel = -1
+			For Local k:Int = 0 Until labels.sclist.sclistline.Length
+				If labels.sclist.sclistline[k] >= 0 Then labels.scidsel = k; Exit
+			Next
+		EndIf
+		If labels.scidsel < 0 Then Return
+		Local i:Int = labels.sclist.sclistline[labels.scidsel]
+		Local o:Obj3D = draw.oggetti[i]
+		Local onm:String = GetObj3DName(o, i)
+		draw.sclist.AddShortcut("Name@" + onm, i, "")
+		If Model3D(o)
+			Local m:Model3D = Model3D(o)
+			draw.sclist.AddShortcut("Type@Model3D", i, "")
+			If m.modello Then draw.sclist.AddShortcut("Position@" + m.modello.WorldX + ", " + m.modello.WorldY + ", " + m.modello.WorldZ, i, "")
+			If m.editmesh Then
+				draw.sclist.AddShortcut("Edit Verts@" + m.editmesh.verts.Length, i, "")
+				draw.sclist.AddShortcut("Edit Faces@" + m.editmesh.faces.Length, i, "")
+				If m.selkind = 1 Then draw.sclist.AddShortcut("Selection@Vertex " + m.selindex, i, "")
+				If m.selkind = 3 And m.selindex >= 0 And m.selindex < m.editmesh.faces.Length Then
+					draw.sclist.AddShortcut("Selection@Face " + m.selindex, i, "")
+					draw.sclist.AddShortcut("Face Verts@" + m.editmesh.faces[m.selindex].verts.Length, i, "")
+				EndIf
+			EndIf
+		ElseIf Image3D(o)
+			Local im:Image3D = Image3D(o)
+			draw.sclist.AddShortcut("Type@Image3D", i, "")
+			draw.sclist.AddShortcut("Position@" + im.x1 + ", " + im.y1 + ", " + im.z1, i, "")
+			draw.sclist.AddShortcut("Scale@" + im.sx + ", " + im.sy + ", " + im.sz, i, "")
+			If im.filn <> "" Then draw.sclist.AddShortcut("File@" + im.filn, i, "")
+		ElseIf Text3D(o)
+			Local tx:Text3D = Text3D(o)
+			draw.sclist.AddShortcut("Type@Text3D", i, "")
+			draw.sclist.AddShortcut("Text@" + tx.txt, i, "")
+			draw.sclist.AddShortcut("Position@" + tx.x1 + ", " + tx.y1 + ", " + tx.z1, i, "")
+			draw.sclist.AddShortcut("Scale@" + tx.sx + ", " + tx.sy + ", " + tx.sz, i, "")
+			draw.sclist.AddShortcut("Justify X@" + GetTextJustXName(tx.justx), i, "")
+			draw.sclist.AddShortcut("Justify Y@" + GetTextJustYName(tx.justy), i, "")
+		ElseIf Line3D(o)
+			Local li:Line3D = Line3D(o)
+			draw.sclist.AddShortcut("Type@Line3D", i, "")
+			draw.sclist.AddShortcut("P1@" + li.x1 + ", " + li.y1 + ", " + li.z1, i, "")
+			draw.sclist.AddShortcut("P2@" + li.x2 + ", " + li.y2 + ", " + li.z2, i, "")
+		ElseIf Circle3D(o)
+			Local ci:Circle3D = Circle3D(o)
+			draw.sclist.AddShortcut("Type@Circle3D", i, "")
+			draw.sclist.AddShortcut("Center@" + ci.x1 + ", " + ci.y1 + ", " + ci.z1, i, "")
+			draw.sclist.AddShortcut("Radius@" + ci.radius, i, "")
+		EndIf
+	End
+	
+	Method GetTextJustXName:String(v:Int)
+		Select v
+			Case 0
+				Return "LEFT"
+			Case 2
+				Return "RIGHT"
+		End
+		Return "CENTER"
+	End
+	
+	Method GetTextJustYName:String(v:Int)
+		Select v
+			Case 0
+				Return "TOP"
+			Case 2
+				Return "BOTTOM"
+		End
+		Return "MIDDLE"
+	End
+	
+	Method GetText3DDrawPos:Float[](tx3:Text3D)
+		Local p:Float[] = New Float[3]
+		Local hw:Float = Abs(tx3.sx) * 0.5
+		Local hh:Float = Abs(tx3.sy) * 0.5
+		p[0] = tx3.x1
+		p[1] = tx3.y1
+		p[2] = tx3.z1
+		Select tx3.justx
+			Case 0
+				p[0] -= hw
+			Case 2
+				p[0] += hw
+		End
+		Select tx3.justy
+			Case 0
+				p[1] -= hh
+			Case 2
+				p[1] += hh
+		End
+		Return p
+	End
+
+	Method ExpandSceneBoundsPoint(px:Float, py:Float, pz:Float, mins:Float[], maxs:Float[])
+		If px < mins[0] Then mins[0] = px
+		If py < mins[1] Then mins[1] = py
+		If pz < mins[2] Then mins[2] = pz
+		If px > maxs[0] Then maxs[0] = px
+		If py > maxs[1] Then maxs[1] = py
+		If pz > maxs[2] Then maxs[2] = pz
+	End
+
+	Method ExpandSceneBoundsAABB(minx:Float, miny:Float, minz:Float, maxx:Float, maxy:Float, maxz:Float, mins:Float[], maxs:Float[])
+		ExpandSceneBoundsPoint(minx, miny, minz, mins, maxs)
+		ExpandSceneBoundsPoint(maxx, maxy, maxz, mins, maxs)
+	End
+
+	Method ExpandSceneBoundsRotatedBox(cx:Float, cy:Float, cz:Float, hx:Float, hy:Float, hz:Float, pitch:Float, yaw:Float, roll:Float, mins:Float[], maxs:Float[])
+		Local q:Float[4]
+		Local rv:Float[4]
+		QuatSetEuler(pitch, yaw, roll, q)
+		For Local ix:Int = 0 To 1
+			Local lx:Float = -hx
+			If ix = 1 Then lx = hx
+			For Local iy:Int = 0 To 1
+				Local ly:Float = -hy
+				If iy = 1 Then ly = hy
+				For Local iz:Int = 0 To 1
+					Local lz:Float = -hz
+					If iz = 1 Then lz = hz
+					QuatMulVec3(q[0], q[1], q[2], q[3], lx, ly, lz, rv)
+					ExpandSceneBoundsPoint(cx + rv[0], cy + rv[1], cz + rv[2], mins, maxs)
+				Next
+			Next
+		Next
+	End
+
+	Method ExpandSceneBoundsTransformedBox(localMinX:Float, localMinY:Float, localMinZ:Float, localMaxX:Float, localMaxY:Float, localMaxZ:Float, px:Float, py:Float, pz:Float, pitch:Float, yaw:Float, roll:Float, sx:Float, sy:Float, sz:Float, mins:Float[], maxs:Float[])
+		Local q:Float[4]
+		Local rv:Float[4]
+		QuatSetEuler(pitch, yaw, roll, q)
+		For Local ix:Int = 0 To 1
+			Local lx:Float = localMinX
+			If ix = 1 Then lx = localMaxX
+			lx *= sx
+			For Local iy:Int = 0 To 1
+				Local ly:Float = localMinY
+				If iy = 1 Then ly = localMaxY
+				ly *= sy
+				For Local iz:Int = 0 To 1
+					Local lz:Float = localMinZ
+					If iz = 1 Then lz = localMaxZ
+					lz *= sz
+					QuatMulVec3(q[0], q[1], q[2], q[3], lx, ly, lz, rv)
+					ExpandSceneBoundsPoint(px + rv[0], py + rv[1], pz + rv[2], mins, maxs)
+				Next
+			Next
+		Next
+	End
+
+	Method ExpandSceneBoundsForObject(o:Obj3D, mins:Float[], maxs:Float[])
+		If o = Null Or IsGridLine(o) Then Return
+		
+		Local m3:Model3D = Model3D(o)
+		If m3
+			If m3.editmesh And m3.editmesh.verts.Length > 0
+				For Local i:Int = 0 Until m3.editmesh.verts.Length
+					Local v:EditVertex = m3.editmesh.verts[i]
+					If v = Null Or v.hidden Then Continue
+					ExpandSceneBoundsPoint(m3.x1 + v.x, m3.y1 + v.y, m3.z1 + v.z, mins, maxs)
+				Next
+			ElseIf m3.modello
+				Local mm:Mesh = m3.modello.Mesh
+				If mm
+					ExpandSceneBoundsTransformedBox(mm.BoxMinX, mm.BoxMinY, mm.BoxMinZ, mm.BoxMaxX, mm.BoxMaxY, mm.BoxMaxZ, m3.modello.WorldX, m3.modello.WorldY, m3.modello.WorldZ, m3.modello.Pitch, m3.modello.Yaw, m3.modello.Roll, m3.modello.ScaleX, m3.modello.ScaleY, m3.modello.ScaleZ, mins, maxs)
+				Else
+					ExpandSceneBoundsPoint(m3.modello.WorldX, m3.modello.WorldY, m3.modello.WorldZ, mins, maxs)
+				EndIf
+			Else
+				ExpandSceneBoundsPoint(m3.x1, m3.y1, m3.z1, mins, maxs)
+			EndIf
+			Return
+		EndIf
+		
+		Local l3:Line3D = Line3D(o)
+		If l3
+			ExpandSceneBoundsPoint(l3.x1, l3.y1, l3.z1, mins, maxs)
+			ExpandSceneBoundsPoint(l3.x2, l3.y2, l3.z2, mins, maxs)
+			Return
+		EndIf
+		
+		Local c3:Circle3D = Circle3D(o)
+		If c3
+			ExpandSceneBoundsAABB(c3.x1 - c3.radius, c3.y1 - c3.radius, c3.z1, c3.x1 + c3.radius, c3.y1 + c3.radius, c3.z1, mins, maxs)
+			Return
+		EndIf
+		
+		Local im3:Image3D = Image3D(o)
+		If im3
+			ExpandSceneBoundsRotatedBox(im3.x1, im3.y1, im3.z1, Abs(im3.sx) * 0.5, Abs(im3.sy) * 0.5, Abs(im3.sz) * 0.5, im3.pitch, im3.yaw, im3.roll, mins, maxs)
+			Return
+		EndIf
+		
+		Local tx3:Text3D = Text3D(o)
+		If tx3
+			Local tp:Float[] = GetText3DDrawPos(tx3)
+			ExpandSceneBoundsRotatedBox(tp[0], tp[1], tp[2], Abs(tx3.sx) * 0.5, Abs(tx3.sy) * 0.5, Abs(tx3.sz) * 0.5, tx3.pitch, tx3.yaw, tx3.roll, mins, maxs)
+		EndIf
+	End
+
+	Method ProjectScenePointIntoBounds(px:Float, py:Float, pz:Float, camx:Float, camy:Float, camz:Float, vf:Float[], bounds2d:Float[], depthRange:Float[], scratchPt:Float[])
+		Local dx:Float = px - camx
+		Local dy:Float = py - camy
+		Local dz:Float = pz - camz
+		Local depth:Float = dx * vf[0] + dy * vf[1] + dz * vf[2]
+		If depth <= 0.01 Then Return
+		scratchPt[0] = px
+		scratchPt[1] = py
+		scratchPt[2] = pz
+		CAM.Project(scratchPt)
+		If CAM.ProjectedX < bounds2d[0] Then bounds2d[0] = CAM.ProjectedX
+		If CAM.ProjectedY < bounds2d[1] Then bounds2d[1] = CAM.ProjectedY
+		If CAM.ProjectedX > bounds2d[2] Then bounds2d[2] = CAM.ProjectedX
+		If CAM.ProjectedY > bounds2d[3] Then bounds2d[3] = CAM.ProjectedY
+		If depth < depthRange[0] Then depthRange[0] = depth
+		If depth > depthRange[1] Then depthRange[1] = depth
+	End
+
+	Method ProjectSceneTransformedBoxIntoBounds(localMinX:Float, localMinY:Float, localMinZ:Float, localMaxX:Float, localMaxY:Float, localMaxZ:Float, px:Float, py:Float, pz:Float, pitch:Float, yaw:Float, roll:Float, sx:Float, sy:Float, sz:Float, camx:Float, camy:Float, camz:Float, vf:Float[], bounds2d:Float[], depthRange:Float[], scratchPt:Float[])
+		Local q:Float[4]
+		Local rv:Float[4]
+		QuatSetEuler(pitch, yaw, roll, q)
+		For Local ix:Int = 0 To 1
+			Local lx:Float = localMinX
+			If ix = 1 Then lx = localMaxX
+			lx *= sx
+			For Local iy:Int = 0 To 1
+				Local ly:Float = localMinY
+				If iy = 1 Then ly = localMaxY
+				ly *= sy
+				For Local iz:Int = 0 To 1
+					Local lz:Float = localMinZ
+					If iz = 1 Then lz = localMaxZ
+					lz *= sz
+					QuatMulVec3(q[0], q[1], q[2], q[3], lx, ly, lz, rv)
+					ProjectScenePointIntoBounds(px + rv[0], py + rv[1], pz + rv[2], camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+				Next
+			Next
+		Next
+	End
+
+	Method ProjectSceneMeshVerticesIntoBounds(mm:Mesh, px:Float, py:Float, pz:Float, pitch:Float, yaw:Float, roll:Float, sx:Float, sy:Float, sz:Float, camx:Float, camy:Float, camz:Float, vf:Float[], bounds2d:Float[], depthRange:Float[], scratchPt:Float[])
+		If mm = Null Then Return
+		Local q:Float[4]
+		Local rv:Float[4]
+		QuatSetEuler(pitch, yaw, roll, q)
+		For Local si:Int = 0 Until mm.NumSurfaces
+			Local surf:Surface = mm.Surface(si)
+			If surf = Null Or surf.NumVertices <= 0 Then Continue
+			Local stepv:Int = 1
+			If surf.NumVertices > 1024 Then stepv = surf.NumVertices / 1024
+			If stepv < 1 Then stepv = 1
+			Local vi:Int = 0
+			While vi < surf.NumVertices
+				Local lx:Float = surf.VertexX(vi) * sx
+				Local ly:Float = surf.VertexY(vi) * sy
+				Local lz:Float = surf.VertexZ(vi) * sz
+				QuatMulVec3(q[0], q[1], q[2], q[3], lx, ly, lz, rv)
+				ProjectScenePointIntoBounds(px + rv[0], py + rv[1], pz + rv[2], camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+				vi += stepv
+			Wend
+			Local lastv:Int = surf.NumVertices - 1
+			If lastv >= 0
+				Local llx:Float = surf.VertexX(lastv) * sx
+				Local lly:Float = surf.VertexY(lastv) * sy
+				Local llz:Float = surf.VertexZ(lastv) * sz
+				QuatMulVec3(q[0], q[1], q[2], q[3], llx, lly, llz, rv)
+				ProjectScenePointIntoBounds(px + rv[0], py + rv[1], pz + rv[2], camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+			EndIf
+		Next
+	End
+
+	Method ProjectSceneBoundsForObject(o:Obj3D, camx:Float, camy:Float, camz:Float, vf:Float[], bounds2d:Float[], depthRange:Float[], scratchPt:Float[])
+		If o = Null Or IsGridLine(o) Then Return
+		
+		Local m3:Model3D = Model3D(o)
+		If m3
+			If m3.editmesh And m3.editmesh.verts.Length > 0
+				Local stepv:Int = 1
+				If m3.editmesh.verts.Length > 1024 Then stepv = m3.editmesh.verts.Length / 1024
+				If stepv < 1 Then stepv = 1
+				Local i:Int = 0
+				While i < m3.editmesh.verts.Length
+					Local v:EditVertex = m3.editmesh.verts[i]
+					If v And v.hidden = 0 Then
+						ProjectScenePointIntoBounds(m3.x1 + v.x, m3.y1 + v.y, m3.z1 + v.z, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+					EndIf
+					i += stepv
+				Wend
+				Local vlast:EditVertex = m3.editmesh.verts[m3.editmesh.verts.Length - 1]
+				If vlast And vlast.hidden = 0 Then ProjectScenePointIntoBounds(m3.x1 + vlast.x, m3.y1 + vlast.y, m3.z1 + vlast.z, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+			ElseIf m3.modello
+				Local mm:Mesh = m3.modello.Mesh
+				If mm
+					ProjectSceneMeshVerticesIntoBounds(mm, m3.modello.WorldX, m3.modello.WorldY, m3.modello.WorldZ, m3.modello.Pitch, m3.modello.Yaw, m3.modello.Roll, m3.modello.ScaleX, m3.modello.ScaleY, m3.modello.ScaleZ, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+				Else
+					ProjectScenePointIntoBounds(m3.x1, m3.y1, m3.z1, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+				EndIf
+			Else
+				ProjectScenePointIntoBounds(m3.x1, m3.y1, m3.z1, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+			EndIf
+			Return
+		EndIf
+		
+		Local l3:Line3D = Line3D(o)
+		If l3
+			ProjectScenePointIntoBounds(l3.x1, l3.y1, l3.z1, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+			ProjectScenePointIntoBounds(l3.x2, l3.y2, l3.z2, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+			Return
+		EndIf
+		
+		Local c3:Circle3D = Circle3D(o)
+		If c3
+			Local steps:Int = 16
+			For Local i:Int = 0 Until steps
+				Local ang:Float = (360.0 * Float(i)) / Float(steps)
+				ProjectScenePointIntoBounds(c3.x1 + Cos(ang) * c3.radius, c3.y1 + Sin(ang) * c3.radius, c3.z1, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+			Next
+			Return
+		EndIf
+		
+		Local im3:Image3D = Image3D(o)
+		If im3
+			ProjectSceneTransformedBoxIntoBounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5, im3.x1, im3.y1, im3.z1, im3.pitch, im3.yaw, im3.roll, im3.sx, im3.sy, im3.sz, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+			Return
+		EndIf
+		
+		Local tx3:Text3D = Text3D(o)
+		If tx3
+			Local tp:Float[] = GetText3DDrawPos(tx3)
+			ProjectSceneTransformedBoxIntoBounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5, tp[0], tp[1], tp[2], tx3.pitch, tx3.yaw, tx3.roll, tx3.sx, tx3.sy, tx3.sz, camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+		EndIf
+	End
+
+	Method ComputeSceneProjectedBounds:Int(tx:Float, ty:Float, tz:Float, dist:Float, vf:Float[], bounds2d:Float[], depthRange:Float[])
+		If dist <= 0.01 Then Return 0
+		Local camx:Float = tx - vf[0] * dist
+		Local camy:Float = ty - vf[1] * dist
+		Local camz:Float = tz - vf[2] * dist
+		CAM.Position(camx, camy, camz)
+		CAM.LookAt(tx, ty, tz)
+		
+		bounds2d[0] = 1000000000.0
+		bounds2d[1] = 1000000000.0
+		bounds2d[2] = -1000000000.0
+		bounds2d[3] = -1000000000.0
+		depthRange[0] = 1000000000.0
+		depthRange[1] = -1000000000.0
+		
+		Local scratchPt:Float[] = New Float[3]
+		For Local i:Int = 0 Until draw.oggetti.Length
+			ProjectSceneBoundsForObject(draw.oggetti[i], camx, camy, camz, vf, bounds2d, depthRange, scratchPt)
+		Next
+		If bounds2d[2] < bounds2d[0] Or bounds2d[3] < bounds2d[1] Then Return 0
+		If depthRange[1] <= 0.01 Then Return 0
+		Return 1
+	End
+
+	Method SceneFitsViewportAtDistance:Int(tx:Float, ty:Float, tz:Float, dist:Float, paddingPixels:Int, vf:Float[], bounds2d:Float[], depthRange:Float[])
+		If ComputeSceneProjectedBounds(tx, ty, tz, dist, vf, bounds2d, depthRange) = 0 Then Return 0
+		
+		Local vw:Int = Max(1, CAM.ViewportWidth)
+		Local vh:Int = Max(1, CAM.ViewportHeight)
+		If bounds2d[0] < paddingPixels Then Return 0
+		If bounds2d[1] < paddingPixels Then Return 0
+		If bounds2d[2] > vw - paddingPixels Then Return 0
+		If bounds2d[3] > vh - paddingPixels Then Return 0
+		Return 1
+	End
+
+	Method SceneCenterOffsetAtDistance:Float(axis:Int, tx:Float, ty:Float, tz:Float, dist:Float, vf:Float[], bounds2d:Float[], depthRange:Float[])
+		If ComputeSceneProjectedBounds(tx, ty, tz, dist, vf, bounds2d, depthRange) = 0 Then Return 0.0
+		If axis = 0
+			Return Float(Max(1, CAM.ViewportWidth)) * 0.5 - (bounds2d[0] + bounds2d[2]) * 0.5
+		Else
+			Return Float(Max(1, CAM.ViewportHeight)) * 0.5 - (bounds2d[1] + bounds2d[3]) * 0.5
+		EndIf
+	End
+
+	Method FindSceneCenterShiftAxis:Float(axis:Int, tx:Float, ty:Float, tz:Float, dist:Float, span:Float, vr:Float[], vu:Float[], vf:Float[], bounds2d:Float[], depthRange:Float[])
+		Local off0:Float = SceneCenterOffsetAtDistance(axis, tx, ty, tz, dist, vf, bounds2d, depthRange)
+		If Abs(off0) < 0.5 Then Return 0.0
+		If span < 1.0 Then span = 1.0
+		
+		Local lo:Float = -span
+		Local hi:Float = span
+		Local offLo:Float
+		Local offHi:Float
+		Local tries:Int
+		For tries = 0 Until 8
+			If axis = 0
+				offLo = SceneCenterOffsetAtDistance(axis, tx + vr[0] * lo, ty + vr[1] * lo, tz + vr[2] * lo, dist, vf, bounds2d, depthRange)
+				offHi = SceneCenterOffsetAtDistance(axis, tx + vr[0] * hi, ty + vr[1] * hi, tz + vr[2] * hi, dist, vf, bounds2d, depthRange)
+			Else
+				offLo = SceneCenterOffsetAtDistance(axis, tx + vu[0] * lo, ty + vu[1] * lo, tz + vu[2] * lo, dist, vf, bounds2d, depthRange)
+				offHi = SceneCenterOffsetAtDistance(axis, tx + vu[0] * hi, ty + vu[1] * hi, tz + vu[2] * hi, dist, vf, bounds2d, depthRange)
+			EndIf
+			If (offLo <= 0 And offHi >= 0) Or (offLo >= 0 And offHi <= 0) Then Exit
+			lo *= 1.5
+			hi *= 1.5
+		Next
+		
+		If (offLo <= 0 And offHi >= 0) Or (offLo >= 0 And offHi <= 0)
+			For Local i:Int = 0 Until 14
+				Local mid:Float = (lo + hi) * 0.5
+				Local offMid:Float
+				If axis = 0
+					offMid = SceneCenterOffsetAtDistance(axis, tx + vr[0] * mid, ty + vr[1] * mid, tz + vr[2] * mid, dist, vf, bounds2d, depthRange)
+				Else
+					offMid = SceneCenterOffsetAtDistance(axis, tx + vu[0] * mid, ty + vu[1] * mid, tz + vu[2] * mid, dist, vf, bounds2d, depthRange)
+				EndIf
+				If Abs(offMid) < 0.5 Then Return mid
+				If (offLo <= 0 And offMid >= 0) Or (offLo >= 0 And offMid <= 0)
+					hi = mid
+					offHi = offMid
+				Else
+					lo = mid
+					offLo = offMid
+				EndIf
+			Next
+			Return (lo + hi) * 0.5
+		EndIf
+		
+		Local depthMid:Float = (depthRange[0] + depthRange[1]) * 0.5
+		If depthMid < 0.1 Then depthMid = dist
+		Local halfH:Float = Tan(CAM.FovY * 0.5) * depthMid
+		Local halfW:Float = halfH * CAM.AspectRatio
+		If axis = 0
+			Return -(off0 / Float(Max(1, CAM.ViewportWidth))) * (halfW * 2.0)
+		Else
+			Return (off0 / Float(Max(1, CAM.ViewportHeight))) * (halfH * 2.0)
+		EndIf
+	End
+
+	Method FindSceneFitDistance:Float(tx:Float, ty:Float, tz:Float, startHi:Float, paddingPixels:Int, vf:Float[], bounds2d:Float[], depthRange:Float[])
+		Local lo:Float = 0.01
+		Local hi:Float = startHi
+		If hi < 1.0 Then hi = 1.0
+		If SceneFitsViewportAtDistance(tx, ty, tz, hi, paddingPixels, vf, bounds2d, depthRange) = 0
+			For Local i:Int = 0 Until 28
+				hi *= 1.35
+				If SceneFitsViewportAtDistance(tx, ty, tz, hi, paddingPixels, vf, bounds2d, depthRange) Then Exit
+			Next
+		EndIf
+		If SceneFitsViewportAtDistance(tx, ty, tz, hi, paddingPixels, vf, bounds2d, depthRange) = 0 Then Return -1.0
+		For Local i:Int = 0 Until 24
+			Local mid:Float = (lo + hi) * 0.5
+			If SceneFitsViewportAtDistance(tx, ty, tz, mid, paddingPixels, vf, bounds2d, depthRange)
+				hi = mid
+			Else
+				lo = mid
+			EndIf
+		Next
+		If SceneFitsViewportAtDistance(tx, ty, tz, hi, paddingPixels, vf, bounds2d, depthRange) = 0 Then Return -1.0
+		Return hi
+	End
+
+	Method FitCameraToScene(paddingPixels:Int = 10)
+		If draw = Null Or CAM = Null Then Return
+		Local oldNear:Float = CAM.Near
+		Local oldFar:Float = CAM.Far
+		CAM.Near = 0.01
+		CAM.Far = 1000000.0
+		
+		Local mins:Float[] = [1000000000.0, 1000000000.0, 1000000000.0]
+		Local maxs:Float[] = [-1000000000.0, -1000000000.0, -1000000000.0]
+		For Local i:Int = 0 Until draw.oggetti.Length
+			ExpandSceneBoundsForObject(draw.oggetti[i], mins, maxs)
+		Next
+		If maxs[0] < mins[0] Or maxs[1] < mins[1] Or maxs[2] < mins[2]
+			CAM.Near = oldNear
+			CAM.Far = oldFar
+			Return
+		EndIf
+		
+		Local tx:Float = (mins[0] + maxs[0]) * 0.5
+		Local ty:Float = (mins[1] + maxs[1]) * 0.5
+		Local tz:Float = (mins[2] + maxs[2]) * 0.5
+		
+		Local q:Float[4]
+		Local vr:Float[4]
+		Local vu:Float[4]
+		Local vf:Float[4]
+		QuatSetEuler(CAM.Pitch, CAM.Yaw, CAM.Roll, q)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 1, 0, 0, vr)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 0, 1, 0, vu)
+		QuatMulVec3(q[0], q[1], q[2], q[3], 0, 0, 1, vf)
+		
+		Local spanX:Float = maxs[0] - mins[0]
+		Local spanY:Float = maxs[1] - mins[1]
+		Local spanZ:Float = maxs[2] - mins[2]
+		Local diag:Float = Sqrt(spanX * spanX + spanY * spanY + spanZ * spanZ)
+		If diag < 1.0 Then diag = 1.0
+		
+		Local bounds2d:Float[] = New Float[4]
+		Local depthRange:Float[] = New Float[2]
+		Local hi:Float = FindSceneFitDistance(tx, ty, tz, Max(diag * 0.5, 1.0), paddingPixels, vf, bounds2d, depthRange)
+		If hi <= 0.0
+			CAM.Near = oldNear
+			CAM.Far = oldFar
+			Return
+		EndIf
+		
+		Local vw:Int = Max(1, CAM.ViewportWidth)
+		Local vh:Int = Max(1, CAM.ViewportHeight)
+		For Local i:Int = 0 Until 5
+			hi = FindSceneFitDistance(tx, ty, tz, hi, paddingPixels, vf, bounds2d, depthRange)
+			If hi <= 0.0
+				CAM.Near = oldNear
+				CAM.Far = oldFar
+				Return
+			EndIf
+			Local shiftX:Float = FindSceneCenterShiftAxis(0, tx, ty, tz, hi, diag, vr, vu, vf, bounds2d, depthRange)
+			tx += vr[0] * shiftX
+			ty += vr[1] * shiftX
+			tz += vr[2] * shiftX
+			hi = FindSceneFitDistance(tx, ty, tz, hi, paddingPixels, vf, bounds2d, depthRange)
+			If hi <= 0.0
+				CAM.Near = oldNear
+				CAM.Far = oldFar
+				Return
+			EndIf
+			Local shiftY:Float = FindSceneCenterShiftAxis(1, tx, ty, tz, hi, diag, vr, vu, vf, bounds2d, depthRange)
+			tx += vu[0] * shiftY
+			ty += vu[1] * shiftY
+			tz += vu[2] * shiftY
+			Local offx:Float = SceneCenterOffsetAtDistance(0, tx, ty, tz, hi, vf, bounds2d, depthRange)
+			Local offy:Float = SceneCenterOffsetAtDistance(1, tx, ty, tz, hi, vf, bounds2d, depthRange)
+			If Abs(offx) < 0.5 And Abs(offy) < 0.5 Then Exit
+		Next
+		
+		hi = FindSceneFitDistance(tx, ty, tz, hi, paddingPixels, vf, bounds2d, depthRange)
+		If hi <= 0.0
+			CAM.Near = oldNear
+			CAM.Far = oldFar
+			Return
+		EndIf
+		
+		CAM.Near = 0.01
+		CAM.Far = Max(1000000.0, depthRange[1] + diag * 4.0 + 1000.0)
+		SetCamTarget(tx, ty, tz)
+	End
+	
+	Method DrawSelectedEditableFace(canv:Canvas, x1:Int, y1:Int, m:Model3D)
+		If CAM = Null Or m = Null Or m.editmesh = Null Then Return
+		If m.selkind <> 3 Or m.selindex < 0 Or m.selindex >= m.editmesh.faces.Length Then Return
+		Local f:EditFace = m.editmesh.faces[m.selindex]
+		If f = Null Or f.verts.Length < 2 Then Return
+		canv.SetColor(1, .65, .15)
+		For Local i:Int = 0 Until f.verts.Length
+			Local ia:Int = f.verts[i]
+			Local ib:Int = f.verts[(i + 1) Mod f.verts.Length]
+			If ia < 0 Or ib < 0 Or ia >= m.editmesh.verts.Length Or ib >= m.editmesh.verts.Length Then Continue
+			Local va:EditVertex = m.editmesh.verts[ia]
+			Local vb:EditVertex = m.editmesh.verts[ib]
+			If va = Null Or vb = Null Then Continue
+			Local pa:Float[] = [m.x1 + va.x, m.y1 + va.y, m.z1 + va.z]
+			Local pb:Float[] = [m.x1 + vb.x, m.y1 + vb.y, m.z1 + vb.z]
+			CAM.Project(pa)
+			Local xa:Int = x1 + 5 + CAM.ProjectedX
+			Local ya:Int = y1 + 2 + CAM.ProjectedY
+			CAM.Project(pb)
+			canv.DrawLine(xa, ya, x1 + 5 + CAM.ProjectedX, y1 + 2 + CAM.ProjectedY)
+		Next
+		canv.SetColor(1, 1, 1)
+	End
+
+	Method DrawEditOverlay(canv:Canvas, x1:Int, y1:Int, x2:Int, y2:Int)
+		If draw = Null Or CAM = Null Then Return
+		For Local i:Int = 0 Until draw.oggetti.Length
+			Local em3:Model3D = Model3D(draw.oggetti[i])
+			If em3 And em3.editmesh Then
+				DrawSelectedEditableFace(canv, x1, y1, em3)
+				For Local vi:Int = 0 Until em3.editmesh.verts.Length
+					Local v:EditVertex = em3.editmesh.verts[vi]
+					If v = Null Or v.hidden Then Continue
+					Local ptv:Float[] = [em3.x1 + v.x, em3.y1 + v.y, em3.z1 + v.z]
+					CAM.Project(ptv)
+					If v.selected Then canv.SetColor(1, .5, 0) Else canv.SetColor(.1, .9, 1)
+					canv.DrawCircle(x1 + 5 + CAM.ProjectedX, y1 + 2 + CAM.ProjectedY, 8)
+				Next
+				canv.SetColor(1, 1, 1)
+			EndIf
+		Next
+	End
+	
+	Method DrawPropertiesList(canv:Canvas, x1:Int, y1:Int, w:Int, h:Int)
+		If draw = Null Or draw.sclist = Null Then Return
+		Local y:Int = y1
+		canv.SetScissor(x1, y1, w, h)
+		For Local i:Int = 0 Until draw.sclist.sclistname.Length
+			If y > y1 + h - 18 Then Exit
+			Local n1:String = draw.sclist.sclistname[i]
+			Local n2:String = draw.sclist.sclistname2[i]
+			If n1 = "-"
+				canv.DrawLine(x1 + 4, y + 8, x1 + w - 8, y + 8)
+			ElseIf n2 = ""
+				font1.DrawText(canv, n1, x1 + 4, y, COLOR_AZURE, 4, 1)
+			Else
+				font1.DrawText(canv, n1 + ": " + n2, x1 + 4, y, COLOR_AZURE, 4, 1)
+			EndIf
+			y += 16
+		Next
+		canv.SetScissor(0, 0, DeviceWidth, DeviceHeight)
+	End
+	
+	Method DrawDrawBox(canv:Canvas, x1, y1, x2, y2)
+		
+		Local objcount:Int = 0
+		Local hascam:Int = 0
+		If draw Then objcount = draw.oggetti.Length
+		If CAM <> Null Then hascam = 1
+		If CAM Then
+			'CAM.Viewport(x1, y1, x2 - x1 - 80, y2 - y1 - 40)
+			CAM.Viewport(x1 + 5, y1 + 2, x2 - 10, y2 - 6)
+			
+			CAMcube.Viewport(x1 + 5 + x2 - 10 - 200, y1 + 2, 200, 200)
+		EndIf
+		
+		'ALTRO...
+		If draw Then RefreshObj3DLists()
+		If draw Then
+			For Local i:Int = 0 Until draw.oggetti.Length
+				Local im3:Image3D = Image3D(draw.oggetti[i])
+				If im3 Then
+					Local hasmodel3:Int = 0
+					Local hasimg3:Int = 0
+					If im3.modello <> Null Then hasmodel3 = 1
+					If im3.img <> Null Then hasimg3 = 1
+					If im3.modello Then
+						im3.modello.Position(im3.x1, im3.y1, im3.z1)
+						im3.modello.Rotate(im3.pitch, im3.yaw, im3.roll)
+						im3.modello.Scale(im3.sx, im3.sy, im3.sz)
+					ElseIf CAM And im3.img Then
+						Local pt:Float[] = New Float[3]
+						pt[0] = im3.x1 ; pt[1] = im3.y1 ; pt[2] = im3.z1
+						CAM.Project(pt)
+						canv.DrawImage(im3.img, x1 + 5 + CAM.ProjectedX - im3.img.Width() * 0.5, y1 + 2 + CAM.ProjectedY - im3.img.Height() * 0.5)
+					EndIf
+				EndIf
+				Local tx3:Text3D = Text3D(draw.oggetti[i])
+				If tx3 Then
+					Local hasmodelt:Int = 0
+					Local hasimgt:Int = 0
+					If tx3.modello <> Null Then hasmodelt = 1
+					If tx3.txti <> Null Then hasimgt = 1
+					Local tp:Float[] = GetText3DDrawPos(tx3)
+					If tx3.modello Then
+						tx3.modello.Position(tp[0], tp[1], tp[2])
+						tx3.modello.Rotate(tx3.pitch, tx3.yaw, tx3.roll)
+						tx3.modello.Scale(tx3.sx, tx3.sy, tx3.sz)
+					ElseIf CAM And tx3.txti Then
+						CAM.Project(tp)
+						canv.DrawImage(tx3.txti, x1 + 5 + CAM.ProjectedX - tx3.txti.Width() * 0.5, y1 + 2 + CAM.ProjectedY - tx3.txti.Height() * 0.5)
+					EndIf
+				EndIf
+			Next
+		EndIf
+	End
+	
+	Method UpdateDrawBox(x1, y1, x2, y2)
+		
+		
+		'SetFocusSheet(actsheet)
+		
+		'If actsheet = focussheet Then
+			
+		'Local xs = xca1 + x1
+		'Local ys = yca1 + y1
+			
+		
+			
+		If IsOnRect(x1, y1, x2, y2) Then
+		
+		EndIf
+		
+		
+		
+		If IsTouchHit(x1, y1, x2, y2) Then
+		
+			SetFocusSheet(actsheet)
+	
+			actfocusmode = idfocus
+		
+		EndIf
+		
+		
+		
+	End
+		
+	Method UpdateDrawBoxOne(x1, y1, x2, y2)
+	
+		'Local afm = idfocus
+	
+		Local xxca = x1 '+ doc.ww2 + 6
+		Local yyca = y1
+		Local wwca = x2 '- doc.ww2 - 26
+		Local hhca = y2 '+ (1 - KHbox) * 20
+		Local xcube = x1 + 5 + x2 - 10 - 200
+		Local ycube = y1 + 2
+		Local wcube = 200
+		Local hcube = 200
+		
+		If CAM = Null Then Return
+		
+		If touchhit Then
+			If CAMcube And IsOnRect(xcube, ycube, wcube, hcube) Then
+				hookcamcube = 1
+			ElseIf IsOnRect(xxca, yyca, wwca, hhca) Then
+				If HookEditableVertex(x1, y1) = 0 Then hookpan = 1
+			EndIf
+		EndIf
+		
+		If hookcamcube Then
+			If touchrel Or (touchdown = 0 And touchhit = 0) Then
+				hookcamcube = 0
+			ElseIf CAMcube Then
+				Local dx:Float = xmou - xmou2
+				Local dy:Float = ymou - ymou2
+				Local cx2:Float = CAMcube.X
+				Local cy2:Float = CAMcube.Y
+				Local cz2:Float = CAMcube.Z
+				Local distc:Float = Sqrt(cx2 * cx2 + cy2 * cy2 + cz2 * cz2)
+				Local yawc:Float = ATan2(cx2, cz2)
+				Local pitchc:Float = ATan2(cy2, Sqrt(cx2 * cx2 + cz2 * cz2))
+				Local tx:Float = camtargetx
+				Local ty:Float = camtargety
+				Local tz:Float = camtargetz
+				yawc = yawc + dx
+				pitchc = pitchc + dy
+				If pitchc > 89 Then pitchc = 89
+				If pitchc < -89 Then pitchc = -89
+				If distc < 0.001 Then distc = 30
+				Local nx:Float = distc * Cos(pitchc) * Sin(yawc)
+				Local ny:Float = distc * Sin(pitchc)
+				Local nz:Float = distc * Cos(pitchc) * Cos(yawc)
+				CAMcube.Position(nx, ny, nz)
+				If MCubo Then CAMcube.LookAt(MCubo, 0) Else CAMcube.LookAt(0, 0, 0)
+				Local cdx:Float = CAM.X - tx
+				Local cdy:Float = CAM.Y - ty
+				Local cdz:Float = CAM.Z - tz
+				Local distm:Float = Sqrt(cdx * cdx + cdy * cdy + cdz * cdz)
+				If distm < 0.001 Then distm = 150
+				Local km:Float = distm / distc
+				CAM.Position(tx + nx * km, ty + ny * km, tz + nz * km)
+				SetCamTarget(tx, ty, tz)
+			EndIf
+		ElseIf hookeditvertex Then
+			If touchrel Or (touchdown = 0 And touchhit = 0) Then
+				hookeditvertex = 0; hookeditobj = -1; hookeditvert = -1
+			Else
+				MoveHookedEditableVertex(xmou - xmou2, ymou - ymou2)
+			EndIf
+		ElseIf hookpan Then
+			If touchrel Or (touchdown = 0 And touchhit = 0) Then
+				hookpan = 0
+			Else
+				PanViewByMouse(xmou - xmou2, ymou - ymou2)
+			EndIf
+		EndIf
+		
+		If zmou <> 0 Then
+			If IsOnRect(xxca, yyca, wwca, hhca) Then
+				Local cx:Float = CAM.X - camtargetx
+				Local cy:Float = CAM.Y - camtargety
+				Local cz:Float = CAM.Z - camtargetz
+				Local dist:Float = Sqrt(cx * cx + cy * cy + cz * cz)
+				Local zoomstep:Float = 10
+				If KeyDown(KEY_CONTROL) Then zoomstep *= 10
+				If KeyDown(KEY_SHIFT) Then zoomstep *= 0.005
+				Local dist2:Float = dist - zmou * zoomstep
+				If dist2 < 0.1 Then dist2 = 0.1
+				If dist > 0.001 Then
+					Local kk:Float = dist2 / dist
+					CAM.Position(camtargetx + cx * kk, camtargety + cy * kk, camtargetz + cz * kk)
+				Else
+					CAM.Position(camtargetx, camtargety, camtargetz + dist2)
+				EndIf
+				SetCamTarget(camtargetx, camtargety, camtargetz)
+			EndIf
+		EndIf
+		
+	End
+		
+	Method UpdateTextBoxOne(x1, y1, x2, y2)
+		UpdateDrawBoxOne(x1, y1, x2, y2)
+	End
+		
+	Method CloseBox(sh:blSheet)
+		
+		If draw.drawchanged = 1 Then
+					
+			Local asksave:Int = Proceed("SAVE PROJECT", "Do you want to save the changes to the project " + draw.projname + "?", True)
+			
+			If asksave = -1 Then Return 100
+							
+		EndIf
+		
+		Local hasOtherSameFile:Int = HasOtherOpenDrawSameFile()
+		Discard3DResources(1 - hasOtherSameFile)
+		sh.childsboxes.Remove(Self)
+						
+		If sh.childsboxes.IsEmpty Then
+					
+			blSheet.CloseSheet(sh)
+					
+			If Not blSheet.allsheets.IsEmpty Then
+				
+				focussheet = blSheet.allsheets.Last
+				focussheet.focusbox = focussheet.childsboxes.Last
+				
+			Else
+				
+				'ClearALL
+				
+				'If namesolution <> "" Then CloseSolution
+				
+			EndIf
+			
+		Else
+		
+			sh.focusbox = sh.childsboxes.Last
+			
+		EndIf
+		
+	End
+	
+	Method CloseBoxNoAsk(sh:blSheet)
+		
+		Local hasOtherSameFile:Int = HasOtherOpenDrawSameFile()
+		Discard3DResources(1 - hasOtherSameFile)
+		sh.childsboxes.Remove(Self)
+		
+		If sh.childsboxes.IsEmpty Then
+					
+			blSheet.CloseSheet(sh)
+					
+			If Not blSheet.allsheets.IsEmpty Then
+				
+				focussheet = blSheet.allsheets.Last
+				focussheet.focusbox = focussheet.childsboxes.Last
+				
+			Else
+			
+				'ClearALL
+				
+			EndIf
+			
+		Else
+		
+			sh.focusbox = sh.childsboxes.Last
+			
+		EndIf
+			
+	End
+	
+End
+
+
+Class blDataDraw Extends blDoc
+		
+	'Field filename:String
+		
+' fullname is inherited from blDoc
+' projname is inherited from blDoc
+	Field oggetti:Obj3D[] = New Obj3D[0]
+	
+	
+	'Const stepcrs = 256
+	'Field Crs:Int[stepcrs]
+	
+	'Field idurstates:Int
+	'Field idurstates2:Int
+	'Const maxur = 2047 '?  (511 is better?)
+	'Field URstates:URstate[maxur + 1]
+
+	
+	'Field numtotallines
+	'Field numtotallines2
+	
+	'Field ww2
+	
+	Field drawchanged
+	
+	'Field textlocked
+	
+	'Field language:Int
+	
+	
+	' sclist is inherited from blDoc
+	Method New(filnam:String)
+		
+		'fullname = filnam
+	
+		filnam = AdjustPath(filnam)
+
+		Self.fullname = filnam
+		Self.projname = os.StripDir(filnam)
+
+				
+		'Self.fullname = AdjustPath(Self.fullname)
+		'filnam = AdjustPath(filnam)
+		
+		
+		'LoadFile filnam
+		
+		
+	End Method
+
+	Method New()
+	
+		'Text = "CIAO" + invio
+		
+		'Crs = Crs.Resize(256)
+		
+		'Local l:Int = Crs.Length
+		
+		'Print l
+		
+	End
+	
+End
+
+' --- orientation cube (TOP / BOTTOM / FRONT / BACK / LEFT / RIGHT) ------
+' Moved here from CxCAD on 2026-09-03 with its six textures, so any
+' application can have it:  MCubo = New Model(CreateMCuboMesh())
+
+Function CreateCubeMat:material.Material(texfile:String)
+	Local m:material.Material = New material.Material
+	m.Color = vortex3.color.Color.RGB(220, 220, 220)
+	m.ColorTexture = vortex3.texture.Texture.Load(texfile)
+	Return m
+End
+
+Function CreateCubeFace:Surface(ax:Float, ay:Float, az:Float, bx:Float, by:Float, bz:Float, cx:Float, cy:Float, cz:Float, dx:Float, dy:Float, dz:Float, nx:Float, ny:Float, nz:Float, tx:Float, ty:Float, tz:Float)
+	Local s:Surface = New Surface
+	s.AddVertex(ax, ay, az, nx, ny, nz, $FFFFFFFF, 0, 0); s.VertexTangent(0, tx, ty, tz)
+	s.AddVertex(bx, by, bz, nx, ny, nz, $FFFFFFFF, 1, 0); s.VertexTangent(1, tx, ty, tz)
+	s.AddVertex(cx, cy, cz, nx, ny, nz, $FFFFFFFF, 0, 1); s.VertexTangent(2, tx, ty, tz)
+	s.AddVertex(dx, dy, dz, nx, ny, nz, $FFFFFFFF, 1, 1); s.VertexTangent(3, tx, ty, tz)
+	s.AddTriangle(0, 1, 2)
+	s.AddTriangle(3, 2, 1)
+	Return s
+End
+
+Function CreateCubeFace180:Surface(ax:Float, ay:Float, az:Float, bx:Float, by:Float, bz:Float, cx:Float, cy:Float, cz:Float, dx:Float, dy:Float, dz:Float, nx:Float, ny:Float, nz:Float, tx:Float, ty:Float, tz:Float)
+	Local s:Surface = New Surface
+	s.AddVertex(ax, ay, az, nx, ny, nz, $FFFFFFFF, 1, 1); s.VertexTangent(0, tx, ty, tz)
+	s.AddVertex(bx, by, bz, nx, ny, nz, $FFFFFFFF, 0, 1); s.VertexTangent(1, tx, ty, tz)
+	s.AddVertex(cx, cy, cz, nx, ny, nz, $FFFFFFFF, 1, 0); s.VertexTangent(2, tx, ty, tz)
+	s.AddVertex(dx, dy, dz, nx, ny, nz, $FFFFFFFF, 0, 0); s.VertexTangent(3, tx, ty, tz)
+	s.AddTriangle(0, 1, 2)
+	s.AddTriangle(3, 2, 1)
+	Return s
+End
+
+Function CreateMCuboMesh:Mesh()
+	Local m:Mesh = New Mesh
+	m.AddSurface(CreateCubeFace( 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,  0.5,-0.5, 0.5, -0.5,-0.5, 0.5,  0, 0, 1, -1, 0, 0), CreateCubeMat("cube_top.png"))
+	m.AddSurface(CreateCubeFace(-0.5, 0.5,-0.5,  0.5, 0.5,-0.5, -0.5,-0.5,-0.5,  0.5,-0.5,-0.5,  0, 0,-1,  1, 0, 0), CreateCubeMat("cube_bottom.png"))
+	m.AddSurface(CreateCubeFace180(-0.5,-0.5,-0.5,  0.5,-0.5,-0.5, -0.5,-0.5, 0.5,  0.5,-0.5, 0.5,  0,-1, 0,  1, 0, 0), CreateCubeMat("cube_front.png"))
+	m.AddSurface(CreateCubeFace180(-0.5, 0.5, 0.5,  0.5, 0.5, 0.5, -0.5, 0.5,-0.5,  0.5, 0.5,-0.5,  0, 1, 0,  1, 0, 0), CreateCubeMat("cube_back.png"))
+	m.AddSurface(CreateCubeFace( 0.5, 0.5,-0.5,  0.5, 0.5, 0.5,  0.5,-0.5,-0.5,  0.5,-0.5, 0.5,  1, 0, 0,  0, 0, 1), CreateCubeMat("cube_left.png"))
+	m.AddSurface(CreateCubeFace(-0.5, 0.5, 0.5, -0.5, 0.5,-0.5, -0.5,-0.5, 0.5, -0.5,-0.5,-0.5, -1, 0, 0,  0, 0,-1), CreateCubeMat("cube_right.png"))
+	m.Rebuild()
+	Return m
+End

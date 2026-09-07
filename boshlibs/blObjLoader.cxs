@@ -1,0 +1,2290 @@
+' blObjLoader - caricamento di modelli Wavefront .obj (con gestione dei file
+' grossi, oltre i 50 MB, a blocchi). Spostato qui da CxCAD il 2026-09-03:
+' non dipendeva da nulla del progetto, solo da vortex3 e brl.
+'
+' Punto d'ingresso: LoadOBJMeshAuto(path) ritorna una Mesh di vortex3.
+
+Strict
+
+Import vortex3
+Import vortex3.src.loader_3ds_x
+Import os
+Import brl.databuffer
+Import brl.filestream
+'Millisecs arrivava di rimbalzo dall'Import cxcad che stava dentro loader_3ds_x; ora che
+'il modulo non dipende piu' dal progetto, mojo.app va chiesto qui.
+Import mojo.app
+
+Global OBJImportLastError:String = ""
+Global OBJImportLastWarning:String = ""
+Global OBJDebugEnabled:Int = 1
+Global OBJDebugSession:String = "obj-large-crash"
+Global OBJEnableLargeFileLoader:Int = 1
+
+Function OBJDebugLogPath:String()
+	Return CurrentDir().Replace("\", "/") + "/trae-debug-log-" + OBJDebugSession + ".ndjson"
+End
+
+Function OBJDebugLog:Void(tag:String, msg:String)
+	If Not OBJDebugEnabled Then Return
+	Local fs:FileStream = FileStream.Open(OBJDebugLogPath(), "a")
+	If Not fs Then fs = FileStream.Open(OBJDebugLogPath(), "w")
+	If Not fs Then Return
+	fs.WriteString(Millisecs() + "|" + tag + "|" + msg + "~n")
+	fs.Close()
+End
+Global OBJLargeFileThreshold:Int = 50000000
+Global OBJLargeDirectProxyThreshold:Int = 0
+Global OBJLargeSafeMaxSurfVertices:Int = 20000
+Global OBJLargeSafeMaxSourceVertices:Int = 2000000
+Global OBJLargeSafeMaxFaceVertices:Int = 4000000
+Global OBJLargeSafeMaxTriangles:Int = 2500000
+Global OBJLargeFallbackToProxy:Int = 1
+Global OBJOver50MBMaxSurfVertices:Int = 12000
+Global OBJOver50MBMaxSourceVertices:Int = 4000000
+Global OBJOver50MBMaxFaceVertices:Int = 12000000
+Global OBJOver50MBMaxTriangles:Int = 6000000
+Global OBJOver50MBMaxAttributeTotal:Int = 1500000
+Global OBJOver50MBFallbackToProxy:Int = 1
+Global OBJTextureLoadMaxBytes:Int = 24000000
+Global OBJMaxSurfVerticesOverride:Int = 0
+Global OBJLastAddVertexProbe:Int = -1
+
+' Soglia usata SOLO per evitare la divisione per zero quando si normalizza la
+' normale di faccia. Non serve a scartare triangoli: la vecchia soglia
+' assoluta (0.00001) buttava via la geometria dei modelli normalizzati dentro
+' un cubo unitario, dove i triangoli sono legittimamente piccolissimi.
+Global OBJFaceNormalEpsilon:Float = 0.000000000001
+Global OBJCurrentDiskSurfaceId:Int = -1
+Global OBJUseSafeFaceFlush:Int = 0
+Global OBJScratchFloat1:Float[] = [0.0]
+Global OBJScratchVec2:Float[] = [0.0, 0.0]
+Global OBJScratchVec3:Float[] = [0.0, 0.0, 0.0]
+Global OBJScratchVec3B:Float[] = [0.0, 0.0, 0.0]
+Global OBJScratchVec3C:Float[] = [0.0, 0.0, 0.0]
+
+Function LoadOBJMeshAuto:Mesh(path:String)
+	OBJImportLastError = ""
+	OBJImportLastWarning = ""
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not fs
+		OBJImportLastError = "Unable to open OBJ: " + path
+		OBJDebugLog("auto-open-fail", path)
+		Return Null
+	EndIf
+	Local fileLen:Int = fs.Length
+	fs.Close()
+	OBJDebugLog("auto", path + "|len=" + fileLen)
+	If OBJEnableLargeFileLoader And fileLen >= OBJLargeFileThreshold
+		OBJDebugLog("auto-select", "large")
+		If OBJLargeFallbackToProxy And OBJLargeDirectProxyThreshold > 0 And fileLen >= OBJLargeDirectProxyThreshold
+			OBJDebugLog("auto-size-proxy", "len=" + fileLen)
+			Return CreateOBJFileSizeProxyMesh(path, fileLen)
+		EndIf
+		Return LoadOBJMeshLarge(path)
+	EndIf
+	OBJDebugLog("auto-select", "simple")
+	Return LoadOBJMeshSimple(path)
+End
+
+Function IsOBJFileOver50MB:Int(path:String)
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not fs Then Return False
+	Local fileLen:Int = fs.Length
+	fs.Close()
+	Return fileLen >= OBJLargeFileThreshold
+End
+
+Function LoadOBJMeshOver50MB:Mesh(path:String)
+	OBJImportLastError = ""
+	OBJImportLastWarning = ""
+
+	Local oldMaxSurfVerticesOverride:Int = OBJMaxSurfVerticesOverride
+	Local oldUseSafeFaceFlush:Int = OBJUseSafeFaceFlush
+
+	Local oldLargeSafeMaxSourceVertices:Int = OBJLargeSafeMaxSourceVertices
+	Local oldLargeSafeMaxFaceVertices:Int = OBJLargeSafeMaxFaceVertices
+	Local oldLargeSafeMaxTriangles:Int = OBJLargeSafeMaxTriangles
+	Local oldLargeFallbackToProxy:Int = OBJLargeFallbackToProxy
+
+	OBJMaxSurfVerticesOverride = OBJOver50MBMaxSurfVertices
+	OBJUseSafeFaceFlush = 1
+	OBJLargeSafeMaxSourceVertices = OBJOver50MBMaxSourceVertices
+	OBJLargeSafeMaxFaceVertices = OBJOver50MBMaxFaceVertices
+	OBJLargeSafeMaxTriangles = OBJOver50MBMaxTriangles
+	OBJLargeFallbackToProxy = OBJOver50MBFallbackToProxy
+
+	OBJDebugLog("over50-enter", path + "|surf=" + OBJOver50MBMaxSurfVertices + "|mode=diskcache")
+	Local cache:OBJLargeDiskCache = BuildOBJLargeDiskCache(path)
+	If cache = Null
+		OBJMaxSurfVerticesOverride = oldMaxSurfVerticesOverride
+		OBJUseSafeFaceFlush = oldUseSafeFaceFlush
+		OBJLargeSafeMaxSourceVertices = oldLargeSafeMaxSourceVertices
+		OBJLargeSafeMaxFaceVertices = oldLargeSafeMaxFaceVertices
+		OBJLargeSafeMaxTriangles = oldLargeSafeMaxTriangles
+		OBJLargeFallbackToProxy = oldLargeFallbackToProxy
+		Return Null
+	EndIf
+	Local info:OBJLargeScanInfo = cache.Info
+	OBJDebugLog("over50-scan", "v=" + info.VertexCount + "|vt=" + info.TexCoordCount + "|vn=" + info.NormalCount + "|fv=" + info.FaceVertexTotal + "|tri=" + info.TriangleEstimate)
+	If info.FaceCount <= 0 Or info.TriangleEstimate <= 0
+		DeleteOBJLargeDiskCache(cache)
+		OBJImportLastError = "OBJ imported but produced 0 triangles: " + path
+		OBJMaxSurfVerticesOverride = oldMaxSurfVerticesOverride
+		OBJUseSafeFaceFlush = oldUseSafeFaceFlush
+		OBJLargeSafeMaxSourceVertices = oldLargeSafeMaxSourceVertices
+		OBJLargeSafeMaxFaceVertices = oldLargeSafeMaxFaceVertices
+		OBJLargeSafeMaxTriangles = oldLargeSafeMaxTriangles
+		OBJLargeFallbackToProxy = oldLargeFallbackToProxy
+		Return Null
+	EndIf
+	Local safeReason:String = GetOBJOver50MBSafetyReason(info)
+	If safeReason <> "" Then
+		OBJImportLastWarning = "OBJ oltre soglia, provo import disk-backed: " + safeReason
+		OBJDebugLog("over50-continue", safeReason)
+	EndIf
+
+	Local mesh:Mesh = LoadOBJMeshDiskBacked(path, cache)
+	Local meshOk:String = "0"
+	If mesh <> Null Then meshOk = "1"
+	OBJDebugLog("over50-exit", "mesh=" + meshOk + "|warn=" + OBJImportLastWarning)
+	DeleteOBJLargeDiskCache(cache)
+
+	OBJMaxSurfVerticesOverride = oldMaxSurfVerticesOverride
+	OBJUseSafeFaceFlush = oldUseSafeFaceFlush
+	OBJLargeSafeMaxSourceVertices = oldLargeSafeMaxSourceVertices
+	OBJLargeSafeMaxFaceVertices = oldLargeSafeMaxFaceVertices
+	OBJLargeSafeMaxTriangles = oldLargeSafeMaxTriangles
+	OBJLargeFallbackToProxy = oldLargeFallbackToProxy
+
+	Return mesh
+End
+
+Function ScanOBJChunkStream:OBJLargeScanInfo(path:String)
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not fs
+		OBJImportLastError = "Unable to open OBJ: " + path
+		OBJDebugLog("scan-open-fail", path)
+		Return Null
+	EndIf
+
+	Local info:OBJLargeScanInfo = New OBJLargeScanInfo
+	info.FileLen = fs.Length
+
+	Local chunkSize:Int = 262144
+	Local buf:DataBuffer = New DataBuffer(chunkSize)
+	Local carry:String = ""
+	Local readn:Int = 0
+	Local parsedLines:Int = 0
+
+	Repeat
+		readn = fs.Read(buf, 0, chunkSize)
+		If readn <= 0 Then Exit
+
+		Local chunk:String = buf.PeekString(0, readn)
+		If carry <> "" Then
+			chunk = carry + chunk
+			carry = ""
+		EndIf
+		chunk = chunk.Replace("~r", "")
+
+		Local lines:String[] = chunk.Split("~n")
+		Local lastIndex:Int = lines.Length - 1
+		If lastIndex < 0 Then lastIndex = 0
+		If Not chunk.EndsWith("~n")
+			carry = lines[lastIndex]
+			lastIndex -= 1
+		EndIf
+
+		For Local li:Int = 0 To lastIndex
+			Local line:String = NormalizeOBJLine(lines[li])
+			parsedLines += 1
+			If (parsedLines Mod 100000) = 0 Then OBJDebugLog("scan-progress", "lines=" + parsedLines + "|v=" + info.VertexCount + "|vt=" + info.TexCoordCount + "|vn=" + info.NormalCount + "|f=" + info.FaceCount)
+			If line = "" Or line.StartsWith("#") Then Continue
+
+			If line.StartsWith("v ")
+				info.VertexCount += 1
+				Local bits:String[] = line.Split(" ")
+				If bits.Length >= 4
+					UpdateOBJLargeBounds(info, ParseFloatSafeOBJ(bits[1]), ParseFloatSafeOBJ(bits[2]), ParseFloatSafeOBJ(bits[3]))
+				EndIf
+			ElseIf line.StartsWith("vt ")
+				info.TexCoordCount += 1
+			ElseIf line.StartsWith("vn ")
+				info.NormalCount += 1
+			ElseIf line.StartsWith("f ")
+				Local faceVerts:Int = CountOBJFaceVerts(line)
+				If faceVerts >= 3
+					info.FaceCount += 1
+					info.FaceVertexTotal += faceVerts
+					info.TriangleEstimate += faceVerts - 2
+					If faceVerts > info.MaxFaceVertices Then info.MaxFaceVertices = faceVerts
+				EndIf
+			EndIf
+
+			Local stopReason:String = GetOBJOver50MBSafetyReason(info)
+			If stopReason <> ""
+				OBJDebugLog("scan-stop", stopReason)
+				fs.Close()
+				Return info
+			EndIf
+		Next
+	Forever
+	fs.Close()
+
+	If carry <> ""
+		Local line:String = NormalizeOBJLine(carry)
+		If line <> "" And Not line.StartsWith("#")
+			If line.StartsWith("v ")
+				info.VertexCount += 1
+				Local bits:String[] = line.Split(" ")
+				If bits.Length >= 4
+					UpdateOBJLargeBounds(info, ParseFloatSafeOBJ(bits[1]), ParseFloatSafeOBJ(bits[2]), ParseFloatSafeOBJ(bits[3]))
+				EndIf
+			ElseIf line.StartsWith("vt ")
+				info.TexCoordCount += 1
+			ElseIf line.StartsWith("vn ")
+				info.NormalCount += 1
+			ElseIf line.StartsWith("f ")
+				Local faceVerts:Int = CountOBJFaceVerts(line)
+				If faceVerts >= 3
+					info.FaceCount += 1
+					info.FaceVertexTotal += faceVerts
+					info.TriangleEstimate += faceVerts - 2
+					If faceVerts > info.MaxFaceVertices Then info.MaxFaceVertices = faceVerts
+				EndIf
+			EndIf
+
+			Local stopReason:String = GetOBJOver50MBSafetyReason(info)
+			If stopReason <> ""
+				OBJDebugLog("scan-stop", stopReason)
+				Return info
+			EndIf
+		EndIf
+	EndIf
+
+	Return info
+End
+
+Function GetOBJOver50MBSafetyReason:String(info:OBJLargeScanInfo)
+	Local reason:String = GetOBJLargeSafetyReason(info)
+	If reason <> "" Then Return reason
+	If info.TexCoordCount > OBJOver50MBMaxSourceVertices Then Return "texcoords " + info.TexCoordCount + " > " + OBJOver50MBMaxSourceVertices
+	If info.NormalCount > OBJOver50MBMaxSourceVertices Then Return "normals " + info.NormalCount + " > " + OBJOver50MBMaxSourceVertices
+	Local totalAttrs:Int = info.VertexCount + info.TexCoordCount + info.NormalCount
+	If totalAttrs > OBJOver50MBMaxAttributeTotal Then Return "attributes total " + totalAttrs + " > " + OBJOver50MBMaxAttributeTotal
+	Return ""
+End
+
+Function LoadOBJMeshChunkStream:Mesh(path:String)
+	OBJImportLastError = ""
+	OBJImportLastWarning = ""
+	path = path.Replace("\", "/")
+
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not fs
+		OBJImportLastError = "Unable to open OBJ: " + path
+		OBJDebugLog("chunk-open-fail", path)
+		Return Null
+	EndIf
+
+	Local objDir:String = os.ExtractDir(path).Replace("\", "/")
+	Local texPath:String = ""
+	Local fa:Int[] = New Int[3]
+	Local fb:Int[] = New Int[3]
+	Local fc:Int[] = New Int[3]
+	Local fd:Int[] = New Int[3]
+
+	Local verts:FloatStack = New FloatStack
+	Local uvs:FloatStack = New FloatStack
+	Local nrms:FloatStack = New FloatStack
+	Local vcache:StringMap<Int> = New StringMap<Int>
+
+	Local surf:Surface = New Surface
+	Local mesh:Mesh = New Mesh
+	Local maxSurfVertices:Int = 60000
+	If OBJMaxSurfVerticesOverride > 0 Then maxSurfVertices = OBJMaxSurfVerticesOverride
+	Local mat:material.Material = New material.Material
+	mat.Culling = False
+	mat.DepthWrite = True
+	mat.Lighting = True
+	mat.CastShadows = True
+	mat.ReceiveShadows = True
+	mat.Fog = True
+	mat.BlendMode = 0
+	mat.Shininess = 0
+	mat.RefractionCoef = -1
+	mat.SpecularPower = 64
+	mat.CubeOpacity = 0.5
+
+	Local chunkSize:Int = 262144
+	Local buf:DataBuffer = New DataBuffer(chunkSize)
+	Local carry:String = ""
+	Local readn:Int = 0
+	Local parsedLines:Int = 0
+	Local flushedSurfaces:Int = 0
+
+	Repeat
+		readn = fs.Read(buf, 0, chunkSize)
+		If readn <= 0 Then Exit
+
+		Local chunk:String = buf.PeekString(0, readn)
+		If carry <> "" Then
+			chunk = carry + chunk
+			carry = ""
+		EndIf
+
+		chunk = chunk.Replace("~r", "")
+		Local lines:String[] = chunk.Split("~n")
+		Local lastIndex:Int = lines.Length - 1
+		If lastIndex < 0 Then lastIndex = 0
+
+		If Not chunk.EndsWith("~n")
+			carry = lines[lastIndex]
+			lastIndex -= 1
+		EndIf
+
+		For Local li:Int = 0 To lastIndex
+			Local line:String = NormalizeOBJLine(lines[li])
+			parsedLines += 1
+			If (parsedLines Mod 50000) = 0 Then OBJDebugLog("chunk-progress", "lines=" + parsedLines + "|surfaces=" + flushedSurfaces + "|surfv=" + surf.NumVertices + "|surft=" + surf.NumTriangles)
+			If line = "" Or line.StartsWith("#") Then Continue
+
+			Local bits:String[] = line.Split(" ")
+			If bits.Length = 0 Then Continue
+
+			Select bits[0]
+				Case "mtllib"
+					If texPath = "" And bits.Length >= 2
+						texPath = LoadFirstMTLTextureFromLib(objDir, bits[1])
+						If texPath <> "" Then mat.ColorTexture = LoadOBJTextureWithFallback(texPath)
+					EndIf
+				Case "v"
+					If bits.Length >= 4
+						verts.Push(ParseFloatSafeOBJ(bits[1]))
+						verts.Push(ParseFloatSafeOBJ(bits[2]))
+						verts.Push(ParseFloatSafeOBJ(bits[3]))
+					EndIf
+
+				Case "vt"
+					If bits.Length >= 3
+						uvs.Push(ParseFloatSafeOBJ(bits[1]))
+						uvs.Push(1.0 - ParseFloatSafeOBJ(bits[2]))
+					EndIf
+
+				Case "vn"
+					If bits.Length >= 4
+						nrms.Push(ParseFloatSafeOBJ(bits[1]))
+						nrms.Push(ParseFloatSafeOBJ(bits[2]))
+						nrms.Push(ParseFloatSafeOBJ(bits[3]))
+					EndIf
+
+				Case "f"
+					If bits.Length < 4 Then Continue
+					Local faceVerts:Int = bits.Length - 1
+					If surf.NumVertices > 0 And surf.NumVertices + faceVerts >= maxSurfVertices And surf.NumTriangles > 0
+						OBJDebugLog("chunk-flush-before", "s=" + flushedSurfaces + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+						mesh.AddSurface(surf, mat, False)
+						flushedSurfaces += 1
+						OBJDebugLog("chunk-flush-after", "s=" + flushedSurfaces)
+						surf = New Surface
+						vcache = New StringMap<Int>
+					EndIf
+
+					Local vc:Int = verts.Length / 3
+					Local tc:Int = uvs.Length / 2
+					Local nc:Int = nrms.Length / 3
+					If bits.Length = 4
+						ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+						ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+						ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+						AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+					ElseIf bits.Length = 5
+						ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+						ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+						ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+						ParseOBJFaceTokenInto(bits[4], vc, tc, nc, fd)
+						If fa[0] = fd[0] Then
+							AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+						Else
+							AddOBJQuadToSurfaceFast(surf, vcache, verts, uvs, nrms, fa, fb, fc, fd)
+						EndIf
+					Else
+						Local fvi:IntStack = New IntStack
+						Local fti:IntStack = New IntStack
+						Local fni:IntStack = New IntStack
+						For Local i:Int = 1 Until bits.Length
+							ParseOBJFaceTokenInto(bits[i], vc, tc, nc, fa)
+							fvi.Push(fa[0])
+							fti.Push(fa[1])
+							fni.Push(fa[2])
+						Next
+						If fvi.Length >= 4 And fvi.Get(0) = fvi.Get(fvi.Length - 1)
+							fvi.Length -= 1
+							fti.Length -= 1
+							fni.Length -= 1
+						EndIf
+						For Local i:Int = 1 Until fvi.Length - 1
+							AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fvi.Get(0), fti.Get(0), fni.Get(0), fvi.Get(i), fti.Get(i), fni.Get(i), fvi.Get(i + 1), fti.Get(i + 1), fni.Get(i + 1))
+						Next
+					EndIf
+			End
+		Next
+	Forever
+	fs.Close()
+
+	If carry <> ""
+		Local line:String = NormalizeOBJLine(carry)
+		parsedLines += 1
+		If line <> "" And Not line.StartsWith("#")
+			Local bits:String[] = line.Split(" ")
+			If bits.Length > 0
+				Select bits[0]
+					Case "mtllib"
+						If texPath = "" And bits.Length >= 2
+							texPath = LoadFirstMTLTextureFromLib(objDir, bits[1])
+							If texPath <> "" Then mat.ColorTexture = LoadOBJTextureWithFallback(texPath)
+						EndIf
+					Case "v"
+						If bits.Length >= 4
+							verts.Push(ParseFloatSafeOBJ(bits[1]))
+							verts.Push(ParseFloatSafeOBJ(bits[2]))
+							verts.Push(ParseFloatSafeOBJ(bits[3]))
+						EndIf
+					Case "vt"
+						If bits.Length >= 3
+							uvs.Push(ParseFloatSafeOBJ(bits[1]))
+							uvs.Push(1.0 - ParseFloatSafeOBJ(bits[2]))
+						EndIf
+					Case "vn"
+						If bits.Length >= 4
+							nrms.Push(ParseFloatSafeOBJ(bits[1]))
+							nrms.Push(ParseFloatSafeOBJ(bits[2]))
+							nrms.Push(ParseFloatSafeOBJ(bits[3]))
+						EndIf
+					Case "f"
+						If bits.Length >= 4
+							Local faceVerts:Int = bits.Length - 1
+							If surf.NumVertices > 0 And surf.NumVertices + faceVerts >= maxSurfVertices And surf.NumTriangles > 0
+								OBJDebugLog("chunk-flush-before", "s=" + flushedSurfaces + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+								mesh.AddSurface(surf, mat, False)
+								flushedSurfaces += 1
+								OBJDebugLog("chunk-flush-after", "s=" + flushedSurfaces)
+								surf = New Surface
+								vcache = New StringMap<Int>
+							EndIf
+
+							Local vc:Int = verts.Length / 3
+							Local tc:Int = uvs.Length / 2
+							Local nc:Int = nrms.Length / 3
+							If bits.Length = 4
+								ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+								ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+								ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+								AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+							ElseIf bits.Length = 5
+								ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+								ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+								ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+								ParseOBJFaceTokenInto(bits[4], vc, tc, nc, fd)
+								If fa[0] = fd[0] Then
+									AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+								Else
+									AddOBJQuadToSurfaceFast(surf, vcache, verts, uvs, nrms, fa, fb, fc, fd)
+								EndIf
+							Else
+								Local fvi:IntStack = New IntStack
+								Local fti:IntStack = New IntStack
+								Local fni:IntStack = New IntStack
+								For Local i:Int = 1 Until bits.Length
+									ParseOBJFaceTokenInto(bits[i], vc, tc, nc, fa)
+									fvi.Push(fa[0])
+									fti.Push(fa[1])
+									fni.Push(fa[2])
+								Next
+								If fvi.Length >= 4 And fvi.Get(0) = fvi.Get(fvi.Length - 1)
+									fvi.Length -= 1
+									fti.Length -= 1
+									fni.Length -= 1
+								EndIf
+								For Local i:Int = 1 Until fvi.Length - 1
+									AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fvi.Get(0), fti.Get(0), fni.Get(0), fvi.Get(i), fti.Get(i), fni.Get(i), fvi.Get(i + 1), fti.Get(i + 1), fni.Get(i + 1))
+								Next
+							EndIf
+						EndIf
+				End
+			EndIf
+		EndIf
+	EndIf
+
+	OBJDebugLog("chunk-after-parse", "lines=" + parsedLines + "|surfaces=" + flushedSurfaces + "|lastv=" + surf.NumVertices + "|lastt=" + surf.NumTriangles)
+	If surf.NumTriangles > 0
+		OBJDebugLog("chunk-final-surface-before", "s=" + flushedSurfaces + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+		mesh.AddSurface(surf, mat, False)
+		flushedSurfaces += 1
+		OBJDebugLog("chunk-final-surface-after", "s=" + flushedSurfaces)
+	EndIf
+	If mesh.NumSurfaces <= 0
+		OBJImportLastError = "OBJ imported but produced 0 triangles: " + path
+		Return Null
+	EndIf
+	OBJDebugLog("chunk-rebuild-before", "surfaces=" + mesh.NumSurfaces)
+	mesh.Rebuild()
+	OBJDebugLog("chunk-rebuild-after", "surfaces=" + mesh.NumSurfaces)
+	Return mesh
+End
+
+Function LoadOBJMeshSimple:Mesh(path:String)
+	OBJImportLastError = ""
+	OBJImportLastWarning = ""
+	path = path.Replace("\", "/")
+	
+	Local data:DataBuffer = DataBuffer.Load(path)
+	If Not data
+		OBJImportLastError = "Unable to load OBJ: " + path
+		Return Null
+	EndIf
+	Local dataLen:Int = data.Length
+	Local dataPos:Int = 0
+	
+	Local objDir:String = os.ExtractDir(path).Replace("\", "/")
+	Local mtlLib:String = ""
+	Local texPath:String = ""
+	Local currentMtl:String = ""
+	Local fa:Int[] = New Int[3]
+	Local fb:Int[] = New Int[3]
+	Local fc:Int[] = New Int[3]
+	Local fd:Int[] = New Int[3]
+	
+	Local verts:FloatStack = New FloatStack
+	Local uvs:FloatStack = New FloatStack
+	Local nrms:FloatStack = New FloatStack
+	Local vcache:StringMap<Int> = New StringMap<Int>
+	
+	Local surf:Surface = New Surface
+	Local mesh:Mesh = New Mesh
+	Local maxSurfVertices:Int = 60000
+	If OBJMaxSurfVerticesOverride > 0 Then maxSurfVertices = OBJMaxSurfVerticesOverride
+	Local mat:material.Material = New material.Material
+	mat.Culling = False
+	mat.DepthWrite = True
+	mat.Lighting = True
+	mat.CastShadows = True
+	mat.ReceiveShadows = True
+	mat.Fog = True
+	mat.BlendMode = 0
+	mat.Shininess = 0
+	mat.RefractionCoef = -1
+	mat.SpecularPower = 64
+	mat.CubeOpacity = 0.5
+	
+	While dataPos < dataLen
+		Local lineStart:Int = dataPos
+		While dataPos < dataLen And data.PeekByte(dataPos) <> 10 And data.PeekByte(dataPos) <> 13
+			dataPos += 1
+		Wend
+		Local line:String = ""
+		If dataPos > lineStart Then line = data.PeekString(lineStart, dataPos - lineStart)
+		While dataPos < dataLen And (data.PeekByte(dataPos) = 10 Or data.PeekByte(dataPos) = 13)
+			dataPos += 1
+		Wend
+		line = NormalizeOBJLine(line)
+		If line = "" Or line.StartsWith("#") Then Continue
+		
+		Local bits:String[] = line.Split(" ")
+		If bits.Length = 0 Then Continue
+		
+		Select bits[0]
+			Case "mtllib"
+				If bits.Length >= 2
+					mtlLib = bits[1]
+					If texPath = ""
+						texPath = LoadFirstMTLTextureFromLib(objDir, mtlLib)
+						If texPath <> "" Then mat.ColorTexture = LoadOBJTextureWithFallback(texPath)
+					EndIf
+				EndIf
+			Case "usemtl"
+				Local nextMtl:String = ""
+				If line.Length >= 7 Then nextMtl = line[7..].Trim()
+				If nextMtl <> currentMtl
+					If surf.NumTriangles > 0
+						mesh.AddSurface(surf, mat, False)
+						surf = New Surface
+						vcache = New StringMap<Int>
+					EndIf
+					currentMtl = nextMtl
+					texPath = ""
+					If mtlLib <> "" And currentMtl <> "" Then texPath = LoadOBJMaterialTextureFromLib(objDir, mtlLib, currentMtl)
+					mat = CreateOBJDefaultMaterial(texPath)
+					' Molti .mtl non hanno texture e portano il colore nel Kd:
+					' senza questa riga quei modelli venivano importati bianchi.
+					If mtlLib <> "" And currentMtl <> "" Then ApplyOBJMaterialColorFromLib(mat, objDir, mtlLib, currentMtl)
+				EndIf
+			Case "v"
+				If bits.Length >= 4
+					verts.Push(ParseFloatSafeOBJ(bits[1]))
+					verts.Push(ParseFloatSafeOBJ(bits[2]))
+					verts.Push(ParseFloatSafeOBJ(bits[3]))
+				EndIf
+			
+			Case "vt"
+				If bits.Length >= 3
+					uvs.Push(ParseFloatSafeOBJ(bits[1]))
+					uvs.Push(1.0 - ParseFloatSafeOBJ(bits[2]))
+				EndIf
+			
+			Case "vn"
+				If bits.Length >= 4
+					nrms.Push(ParseFloatSafeOBJ(bits[1]))
+					nrms.Push(ParseFloatSafeOBJ(bits[2]))
+					nrms.Push(ParseFloatSafeOBJ(bits[3]))
+				EndIf
+			
+			Case "f"
+				If bits.Length < 4 Then Continue
+				Local faceVerts:Int = bits.Length - 1
+				If OBJUseSafeFaceFlush
+					If surf.NumVertices > 0 And surf.NumVertices + faceVerts >= maxSurfVertices And surf.NumTriangles > 0
+						mesh.AddSurface(surf, mat)
+						surf = New Surface
+						vcache = New StringMap<Int>
+					EndIf
+				Else
+					If surf.NumVertices >= maxSurfVertices And surf.NumTriangles > 0
+						mesh.AddSurface(surf, mat)
+						surf = New Surface
+						vcache = New StringMap<Int>
+					EndIf
+				EndIf
+				Local vc:Int = verts.Length / 3
+				Local tc:Int = uvs.Length / 2
+				Local nc:Int = nrms.Length / 3
+				If bits.Length = 4
+					ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+					ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+					ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+					AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+				ElseIf bits.Length = 5
+					ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+					ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+					ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+					ParseOBJFaceTokenInto(bits[4], vc, tc, nc, fd)
+					If fa[0] = fd[0] Then
+						AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+					Else
+						AddOBJQuadToSurfaceFast(surf, vcache, verts, uvs, nrms, fa, fb, fc, fd)
+					EndIf
+				Else
+					Local fvi:IntStack = New IntStack
+					Local fti:IntStack = New IntStack
+					Local fni:IntStack = New IntStack
+					For Local i:Int = 1 Until bits.Length
+						ParseOBJFaceTokenInto(bits[i], vc, tc, nc, fa)
+						fvi.Push(fa[0]); fti.Push(fa[1]); fni.Push(fa[2])
+					Next
+					If fvi.Length >= 4 And fvi.Get(0) = fvi.Get(fvi.Length - 1) Then fvi.Length -= 1; fti.Length -= 1; fni.Length -= 1
+					For Local i:Int = 1 Until fvi.Length - 1
+						AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fvi.Get(0), fti.Get(0), fni.Get(0), fvi.Get(i), fti.Get(i), fni.Get(i), fvi.Get(i + 1), fti.Get(i + 1), fni.Get(i + 1))
+					Next
+				EndIf
+		End
+	Wend
+	If data Then data.Discard()
+	
+	If surf.NumTriangles > 0 Then mesh.AddSurface(surf, mat, False)
+	If mesh.NumSurfaces <= 0
+		OBJImportLastError = "OBJ imported but produced 0 triangles: " + path
+		Return Null
+	EndIf
+	mesh.Rebuild()
+	Return mesh
+End
+
+Function AddOBJTriToSurface:Void(surf:Surface, vcache:StringMap<Int>, verts:FloatStack, uvs:FloatStack, nrms:FloatStack, vi0:Int, ti0:Int, ni0:Int, vi1:Int, ti1:Int, ni1:Int, vi2:Int, ti2:Int, ni2:Int)
+	If vi0 < 0 Or vi1 < 0 Or vi2 < 0 Or vi0 = vi1 Or vi0 = vi2 Or vi1 = vi2 Then Return
+	Local o0:Int = vi0 * 3, o1:Int = vi1 * 3, o2:Int = vi2 * 3
+	If o0 + 2 >= verts.Length Or o1 + 2 >= verts.Length Or o2 + 2 >= verts.Length Then Return
+	Local x0:Float = verts.Get(o0), y0:Float = verts.Get(o0 + 1), z0:Float = verts.Get(o0 + 2)
+	Local x1:Float = verts.Get(o1), y1:Float = verts.Get(o1 + 1), z1:Float = verts.Get(o1 + 2)
+	Local x2:Float = verts.Get(o2), y2:Float = verts.Get(o2 + 1), z2:Float = verts.Get(o2 + 2)
+	Local ax:Float = x1 - x0, ay:Float = y1 - y0, az:Float = z1 - z0
+	Local bx:Float = x2 - x0, by:Float = y2 - y0, bz:Float = z2 - z0
+	Local nx:Float = ay * bz - az * by
+	Local ny:Float = az * bx - ax * bz
+	Local nz:Float = ax * by - ay * bx
+	Local ll:Float = Sqrt(nx * nx + ny * ny + nz * nz)
+	' Il triangolo va emesso comunque: se la normale di faccia non e'
+	' calcolabile si usa un ripiego, e se l'OBJ ha le vn quelle hanno
+	' comunque la precedenza in EmitOBJVertex.
+	Local fn:Float[] = [0.0, 1.0, 0.0]
+	If ll > OBJFaceNormalEpsilon Then fn = [nx / ll, ny / ll, nz / ll]
+	Local a:Int = EmitOBJVertex(surf, vcache, verts, uvs, nrms, vi0, ti0, ni0, fn)
+	Local b:Int = EmitOBJVertex(surf, vcache, verts, uvs, nrms, vi1, ti1, ni1, fn)
+	Local c:Int = EmitOBJVertex(surf, vcache, verts, uvs, nrms, vi2, ti2, ni2, fn)
+	If a >= 0 And b >= 0 And c >= 0 Then surf.AddTriangle(a, b, c)
+End
+
+Function EmitOBJVertex:Int(surf:Surface, vcache:StringMap<Int>, verts:FloatStack, uvs:FloatStack, nrms:FloatStack, vi:Int, ti:Int, ni:Int, fn:Float[])
+	Local vo:Int = vi * 3
+	If vi < 0 Or vo + 2 >= verts.Length Then Return -1
+	If ni >= 0 And ni * 3 + 2 >= nrms.Length Then ni = -1
+	If ti >= 0 And ti * 2 + 1 >= uvs.Length Then ti = -1
+	Local key:String = vi + "/" + ti + "/" + ni
+	If vcache.Contains(key) Then Return vcache.Get(key)
+	Local nx:Float = fn[0], ny:Float = fn[1], nz:Float = fn[2]
+	If ni >= 0
+		Local no:Int = ni * 3
+		nx = nrms.Get(no) ; ny = nrms.Get(no + 1) ; nz = nrms.Get(no + 2)
+	EndIf
+	Local uu:Float = 0.0, vv:Float = 0.0
+	If ti >= 0
+		Local uvo:Int = ti * 2
+		uu = uvs.Get(uvo) ; vv = uvs.Get(uvo + 1)
+	EndIf
+	Local idx:Int = surf.NumVertices
+	surf.AddVertex(verts.Get(vo), verts.Get(vo + 1), verts.Get(vo + 2), nx, ny, nz, vortex3.color.Color.White, uu, vv)
+	vcache.Set(key, idx)
+	Return idx
+End
+
+Function AddOBJQuadToSurfaceFast:Void(surf:Surface, vcache:StringMap<Int>, verts:FloatStack, uvs:FloatStack, nrms:FloatStack, a:Int[], b:Int[], c:Int[], d:Int[])
+	Local dac:Float = Dist3SqIdx(verts, a[0], c[0])
+	Local dbd:Float = Dist3SqIdx(verts, b[0], d[0])
+	If dac <= dbd
+		AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
+		AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2])
+	Else
+		AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, a[0], a[1], a[2], b[0], b[1], b[2], d[0], d[1], d[2])
+		AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, b[0], b[1], b[2], c[0], c[1], c[2], d[0], d[1], d[2])
+	EndIf
+End
+
+Function AddOBJNgonToSurface:Void(surf:Surface, vcache:StringMap<Int>, verts:FloatStack, uvs:FloatStack, nrms:FloatStack, bits:String[], vc:Int, tc:Int, nc:Int)
+	Local fa:Int[] = New Int[3]
+	Local fvi:IntStack = New IntStack
+	Local fti:IntStack = New IntStack
+	Local fni:IntStack = New IntStack
+	For Local i:Int = 1 Until bits.Length
+		ParseOBJFaceTokenInto(bits[i], vc, tc, nc, fa)
+		fvi.Push(fa[0])
+		fti.Push(fa[1])
+		fni.Push(fa[2])
+	Next
+	If fvi.Length >= 4 And fvi.Get(0) = fvi.Get(fvi.Length - 1)
+		fvi.Length -= 1
+		fti.Length -= 1
+		fni.Length -= 1
+	EndIf
+	For Local i:Int = 1 Until fvi.Length - 1
+		AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fvi.Get(0), fti.Get(0), fni.Get(0), fvi.Get(i), fti.Get(i), fni.Get(i), fvi.Get(i + 1), fti.Get(i + 1), fni.Get(i + 1))
+	Next
+End
+
+Function ParseOBJFaceTokenInto:Void(tok:String, vcount:Int, tcount:Int, ncount:Int, out:Int[])
+	out[0] = -1 ; out[1] = -1 ; out[2] = -1
+	Local part:Int = 0
+	Local sign:Int = 1
+	Local num:Int = 0
+	Local hasnum:Int = 0
+	For Local i:Int = 0 To tok.Length
+		Local ch:Int = 47
+		If i < tok.Length Then ch = tok[i]
+		If ch = 47
+			If hasnum
+				Local idx:Int = sign * num
+				If part = 0 Then out[0] = ResolveOBJIndex(idx, vcount) Else If part = 1 Then out[1] = ResolveOBJIndex(idx, tcount) Else out[2] = ResolveOBJIndex(idx, ncount)
+			EndIf
+			part += 1 ; sign = 1 ; num = 0 ; hasnum = 0
+			If part > 2 Then Exit
+		ElseIf ch = 45
+			sign = -1
+		ElseIf ch >= 48 And ch <= 57
+			num = num * 10 + (ch - 48)
+			hasnum = 1
+		EndIf
+	Next
+End
+
+Function ParseOBJFaceLineBasic:Int(line:String, vcount:Int, tcount:Int, ncount:Int, a:Int[], b:Int[], c:Int[], d:Int[])
+	Local count:Int = 0
+	Local p:Int = SkipOBJRangeSpaces(line, 1, line.Length)
+	While p < line.Length
+		Local q:Int = p
+		While q < line.Length And Not IsOBJWhite(line[q])
+			q += 1
+		Wend
+		If q > p
+			count += 1
+			Select count
+				Case 1
+					ParseOBJFaceTokenInto(line[p..q], vcount, tcount, ncount, a)
+				Case 2
+					ParseOBJFaceTokenInto(line[p..q], vcount, tcount, ncount, b)
+				Case 3
+					ParseOBJFaceTokenInto(line[p..q], vcount, tcount, ncount, c)
+				Case 4
+					ParseOBJFaceTokenInto(line[p..q], vcount, tcount, ncount, d)
+			End
+		EndIf
+		p = SkipOBJRangeSpaces(line, q, line.Length)
+	Wend
+	Return count
+End
+
+Function LoadOBJMeshLarge:Mesh(path:String)
+	OBJImportLastError = ""
+	OBJImportLastWarning = ""
+	path = path.Replace("\", "/")
+	OBJDebugLog("large-enter", path)
+	Local objDir:String = os.ExtractDir(path).Replace("\", "/")
+	Local info:OBJLargeScanInfo = ScanOBJLargeFile(path, objDir)
+	If Not info Then Return Null
+	OBJDebugLog("large-scan", "v=" + info.VertexCount + "|fv=" + info.FaceVertexTotal + "|tri=" + info.TriangleEstimate + "|maxf=" + info.MaxFaceVertices)
+	If info.FaceCount <= 0 Or info.TriangleEstimate <= 0
+		If OBJLargeFallbackToProxy
+			If info.BoundsReady Then Return CreateOBJBoundsProxyMesh(info, "no supported faces") Else Return CreateOBJFileSizeProxyMesh(path, info.FileLen)
+		EndIf
+		OBJImportLastError = "OBJ imported but produced 0 triangles: " + path
+		Return Null
+	EndIf
+	Local safeReason:String = GetOBJLargeSafetyReason(info)
+	If safeReason <> ""
+		If OBJLargeFallbackToProxy
+			If info.BoundsReady Then Return CreateOBJBoundsProxyMesh(info, safeReason) Else Return CreateOBJFileSizeProxyMesh(path, info.FileLen)
+		EndIf
+		OBJImportLastError = "OBJ too large for safe import: " + safeReason + " [" + path + "]"
+		Return Null
+	EndIf
+	Local verts:FloatStack = New FloatStack
+	Local uvs:FloatStack = New FloatStack
+	Local nrms:FloatStack = New FloatStack
+	Local fa:Int[] = New Int[3]
+	Local fb:Int[] = New Int[3]
+	Local fc:Int[] = New Int[3]
+	Local fd:Int[] = New Int[3]
+	Local vcache:StringMap<Int> = New StringMap<Int>
+	Local surf:Surface = New Surface
+	Local mesh:Mesh = New Mesh
+	Local flushedSurfaces:Int = 0
+	Local parsedLines:Int = 0
+	Local maxSurfVertices:Int = OBJLargeSafeMaxSurfVertices
+	Local mat:material.Material = CreateOBJDefaultMaterial(info.TexPath)
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not fs
+		OBJImportLastError = "Unable to reopen OBJ: " + path
+		Return Null
+	EndIf
+	While Not fs.Eof
+		Local line:String = NormalizeOBJLine(fs.ReadLine())
+		parsedLines += 1
+		If (parsedLines Mod 50000) = 0 Then OBJDebugLog("large-progress", "lines=" + parsedLines + "|surfaces=" + flushedSurfaces + "|surfv=" + surf.NumVertices + "|surft=" + surf.NumTriangles)
+		If line = "" Or line.StartsWith("#") Then Continue
+		Local bits:String[] = line.Split(" ")
+		If bits.Length = 0 Then Continue
+		Select bits[0]
+			Case "v"
+				If bits.Length >= 4
+					verts.Push(ParseFloatSafeOBJ(bits[1]))
+					verts.Push(ParseFloatSafeOBJ(bits[2]))
+					verts.Push(ParseFloatSafeOBJ(bits[3]))
+				EndIf
+			Case "vt"
+				If bits.Length >= 3
+					uvs.Push(ParseFloatSafeOBJ(bits[1]))
+					uvs.Push(1.0 - ParseFloatSafeOBJ(bits[2]))
+				EndIf
+			Case "vn"
+				If bits.Length >= 4
+					nrms.Push(ParseFloatSafeOBJ(bits[1]))
+					nrms.Push(ParseFloatSafeOBJ(bits[2]))
+					nrms.Push(ParseFloatSafeOBJ(bits[3]))
+				EndIf
+			Case "f"
+				If bits.Length < 4 Then Continue
+				Local faceVerts:Int = bits.Length - 1
+				If surf.NumVertices > 0 And surf.NumVertices + faceVerts >= maxSurfVertices And surf.NumTriangles > 0
+					OBJDebugLog("large-flush-before", "s=" + flushedSurfaces + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+					mesh.AddSurface(surf, mat, False)
+					flushedSurfaces += 1
+					OBJDebugLog("large-flush-after", "s=" + flushedSurfaces)
+					surf = New Surface
+					vcache = New StringMap<Int>
+				EndIf
+				Local vc:Int = verts.Length / 3
+				Local tc:Int = uvs.Length / 2
+				Local nc:Int = nrms.Length / 3
+				If bits.Length = 4
+					ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+					ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+					ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+					AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+				ElseIf bits.Length = 5
+					ParseOBJFaceTokenInto(bits[1], vc, tc, nc, fa)
+					ParseOBJFaceTokenInto(bits[2], vc, tc, nc, fb)
+					ParseOBJFaceTokenInto(bits[3], vc, tc, nc, fc)
+					ParseOBJFaceTokenInto(bits[4], vc, tc, nc, fd)
+					If fa[0] = fd[0]
+						AddOBJTriToSurface(surf, vcache, verts, uvs, nrms, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+					Else
+						AddOBJQuadToSurfaceFast(surf, vcache, verts, uvs, nrms, fa, fb, fc, fd)
+					EndIf
+				Else
+					AddOBJNgonToSurface(surf, vcache, verts, uvs, nrms, bits, vc, tc, nc)
+				EndIf
+		End
+	Wend
+	fs.Close()
+	OBJDebugLog("large-after-parse", "lines=" + parsedLines + "|surfaces=" + flushedSurfaces + "|lastv=" + surf.NumVertices + "|lastt=" + surf.NumTriangles)
+	If surf.NumTriangles > 0
+		OBJDebugLog("large-final-surface-before", "s=" + flushedSurfaces + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+		mesh.AddSurface(surf, mat)
+		OBJDebugLog("large-final-surface-after", "s=" + (flushedSurfaces + 1))
+	EndIf
+	If mesh.NumSurfaces <= 0
+		OBJImportLastError = "OBJ imported but produced 0 triangles: " + path
+		Return Null
+	EndIf
+	OBJDebugLog("large-rebuild-before", "surfaces=" + mesh.NumSurfaces)
+	mesh.Rebuild()
+	OBJDebugLog("large-rebuild-after", "surfaces=" + mesh.NumSurfaces)
+	Return mesh
+End
+
+
+Class OBJLargeScanInfo
+	Field FileLen:Int
+	Field VertexCount:Int
+	Field TexCoordCount:Int
+	Field NormalCount:Int
+	Field FaceCount:Int
+	Field FaceVertexTotal:Int
+	Field TriangleEstimate:Int
+	Field MaxFaceVertices:Int
+	Field BoundsReady:Int
+	Field MinX:Float
+	Field MinY:Float
+	Field MinZ:Float
+	Field MaxX:Float
+	Field MaxY:Float
+	Field MaxZ:Float
+	Field TexPath:String
+End
+
+Class OBJLargeDiskCache
+	Field Info:OBJLargeScanInfo
+	Field VertPath:String
+	Field UVPath:String
+	Field NrmPath:String
+End
+
+Function CreateOBJLargeTempPath:String(srcPath:String, tag:String)
+	Local base:String = CurrentDir().Replace("\", "/")
+	Local stem:String = os.StripAll(srcPath).Replace(" ", "_")
+	Return base + "/objlarge_" + stem + "_" + Millisecs() + "_" + tag + ".tmp"
+End
+
+Function DeleteOBJLargeDiskCache:Void(cache:OBJLargeDiskCache)
+	If cache = Null Then Return
+	If cache.VertPath <> "" And os.FileType(cache.VertPath) = os.FILETYPE_FILE Then os.DeleteFile(cache.VertPath)
+	If cache.UVPath <> "" And os.FileType(cache.UVPath) = os.FILETYPE_FILE Then os.DeleteFile(cache.UVPath)
+	If cache.NrmPath <> "" And os.FileType(cache.NrmPath) = os.FILETYPE_FILE Then os.DeleteFile(cache.NrmPath)
+End
+
+Function BuildOBJLargeDiskCache:OBJLargeDiskCache(path:String)
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not fs Then
+		OBJImportLastError = "Unable to open OBJ: " + path
+		OBJDebugLog("diskcache-open-fail", path)
+		Return Null
+	EndIf
+
+	Local cache:OBJLargeDiskCache = New OBJLargeDiskCache
+	cache.Info = New OBJLargeScanInfo
+	cache.Info.FileLen = fs.Length
+	Local objDir:String = os.ExtractDir(path).Replace("\", "/")
+	cache.VertPath = CreateOBJLargeTempPath(path, "v")
+	cache.UVPath = CreateOBJLargeTempPath(path, "vt")
+	cache.NrmPath = CreateOBJLargeTempPath(path, "vn")
+
+	Local vfs:FileStream = FileStream.Open(cache.VertPath, "w")
+	Local ufs:FileStream = FileStream.Open(cache.UVPath, "w")
+	Local nfs:FileStream = FileStream.Open(cache.NrmPath, "w")
+	If Not vfs Or Not ufs Or Not nfs
+		If vfs Then vfs.Close()
+		If ufs Then ufs.Close()
+		If nfs Then nfs.Close()
+		fs.Close()
+		DeleteOBJLargeDiskCache(cache)
+		OBJImportLastError = "Unable to create temporary OBJ cache files."
+		OBJDebugLog("diskcache-temp-fail", path)
+		Return Null
+	EndIf
+
+	Local chunkSize:Int = 262144
+	Local buf:DataBuffer = New DataBuffer(chunkSize)
+	Local carry:String = ""
+	Local readn:Int = 0
+	Local parsedLines:Int = 0
+	Local loggedFirstFace:Int = 0
+
+	Repeat
+		readn = fs.Read(buf, 0, chunkSize)
+		If readn <= 0 Then Exit
+
+		Local lineStart:Int = 0
+		Local i:Int = 0
+		While i < readn
+			Local ch:Int = buf.PeekByte(i)
+			If ch = 10 Or ch = 13
+				If carry <> ""
+					Local line:String = ""
+					If i > lineStart Then line = buf.PeekString(lineStart, i - lineStart)
+					line = carry + line
+					carry = ""
+					ProcessOBJLargeDiskCacheLine(line, 0, line.Length, cache, vfs, ufs, nfs, objDir)
+				ElseIf i > lineStart
+					ProcessOBJLargeDiskCacheBufferLine(buf, lineStart, i, cache, vfs, ufs, nfs, objDir)
+				EndIf
+				If loggedFirstFace = 0 And cache.Info.FaceCount > 0
+					loggedFirstFace = 1
+					OBJDebugLog("diskcache-first-face", "lines=" + parsedLines + "|f=" + cache.Info.FaceCount + "|fv=" + cache.Info.FaceVertexTotal)
+				EndIf
+				parsedLines += 1
+				If (parsedLines Mod 100000) = 0 Then OBJDebugLog("diskcache-progress", "lines=" + parsedLines + "|v=" + cache.Info.VertexCount + "|vt=" + cache.Info.TexCoordCount + "|vn=" + cache.Info.NormalCount + "|f=" + cache.Info.FaceCount)
+				i += 1
+				While i < readn
+					ch = buf.PeekByte(i)
+					If ch <> 10 And ch <> 13 Then Exit
+					i += 1
+				Wend
+				lineStart = i
+			Else
+				i += 1
+			EndIf
+		Wend
+
+		Local tail:String = ""
+		If lineStart < readn Then tail = buf.PeekString(lineStart, readn - lineStart)
+		If tail <> ""
+			If carry <> "" Then
+				carry += tail
+			Else
+				carry = tail
+			EndIf
+		EndIf
+	Forever
+
+	If carry <> ""
+		ProcessOBJLargeDiskCacheLine(carry, 0, carry.Length, cache, vfs, ufs, nfs, objDir)
+		If loggedFirstFace = 0 And cache.Info.FaceCount > 0
+			loggedFirstFace = 1
+			OBJDebugLog("diskcache-first-face", "lines=" + parsedLines + "|f=" + cache.Info.FaceCount + "|fv=" + cache.Info.FaceVertexTotal)
+		EndIf
+		parsedLines += 1
+		If (parsedLines Mod 100000) = 0 Then OBJDebugLog("diskcache-progress", "lines=" + parsedLines + "|v=" + cache.Info.VertexCount + "|vt=" + cache.Info.TexCoordCount + "|vn=" + cache.Info.NormalCount + "|f=" + cache.Info.FaceCount)
+	EndIf
+
+	OBJDebugLog("diskcache-close-before", "lines=" + parsedLines + "|v=" + cache.Info.VertexCount + "|vt=" + cache.Info.TexCoordCount + "|vn=" + cache.Info.NormalCount + "|f=" + cache.Info.FaceCount)
+	vfs.Close()
+	ufs.Close()
+	nfs.Close()
+	fs.Close()
+	OBJDebugLog("diskcache-close-after", "lines=" + parsedLines + "|v=" + cache.Info.VertexCount + "|vt=" + cache.Info.TexCoordCount + "|vn=" + cache.Info.NormalCount + "|f=" + cache.Info.FaceCount)
+	OBJDebugLog("diskcache-built", "v=" + cache.Info.VertexCount + "|vt=" + cache.Info.TexCoordCount + "|vn=" + cache.Info.NormalCount + "|f=" + cache.Info.FaceCount)
+	Return cache
+End
+
+Function ProcessOBJLargeDiskCacheLine:Void(src:String, lineStart:Int, lineEnd:Int, cache:OBJLargeDiskCache, vfs:FileStream, ufs:FileStream, nfs:FileStream, objDir:String)
+	Local s:Int = SkipOBJRangeSpaces(src, lineStart, lineEnd)
+	If s >= lineEnd Then Return
+	If src[s] = 35 Then Return
+
+	If src[s] = 109
+		If lineEnd - s >= 6 And src[s + 1] = 116 And src[s + 2] = 108 And src[s + 3] = 108 And src[s + 4] = 105 And src[s + 5] = 98
+			If cache.Info.TexPath = "" Then cache.Info.TexPath = LoadFirstMTLTextureFromLib(objDir, TrimOBJRange(src, s + 6, lineEnd))
+		EndIf
+		Return
+	EndIf
+
+	If src[s] = 118
+		If s + 1 < lineEnd
+			If IsOBJWhite(src[s + 1])
+				If ParseOBJVec3Range(src, s + 1, lineEnd, OBJScratchVec3)
+					vfs.WriteFloat(OBJScratchVec3[0])
+					vfs.WriteFloat(OBJScratchVec3[1])
+					vfs.WriteFloat(OBJScratchVec3[2])
+					cache.Info.VertexCount += 1
+					UpdateOBJLargeBounds(cache.Info, OBJScratchVec3[0], OBJScratchVec3[1], OBJScratchVec3[2])
+				EndIf
+				Return
+			ElseIf src[s + 1] = 116 And s + 2 < lineEnd And IsOBJWhite(src[s + 2])
+				If ParseOBJVec2Range(src, s + 2, lineEnd, OBJScratchVec2)
+					ufs.WriteFloat(OBJScratchVec2[0])
+					ufs.WriteFloat(1.0 - OBJScratchVec2[1])
+					cache.Info.TexCoordCount += 1
+				EndIf
+				Return
+			ElseIf src[s + 1] = 110 And s + 2 < lineEnd And IsOBJWhite(src[s + 2])
+				If ParseOBJVec3Range(src, s + 2, lineEnd, OBJScratchVec3)
+					nfs.WriteFloat(OBJScratchVec3[0])
+					nfs.WriteFloat(OBJScratchVec3[1])
+					nfs.WriteFloat(OBJScratchVec3[2])
+					cache.Info.NormalCount += 1
+				EndIf
+				Return
+			EndIf
+		EndIf
+	EndIf
+
+	If src[s] = 102 And s + 1 < lineEnd And IsOBJWhite(src[s + 1])
+		Local faceVerts:Int = CountOBJFaceVertsRange(src, s + 1, lineEnd)
+		If faceVerts >= 3
+			cache.Info.FaceCount += 1
+			cache.Info.FaceVertexTotal += faceVerts
+			cache.Info.TriangleEstimate += faceVerts - 2
+			If faceVerts > cache.Info.MaxFaceVertices Then cache.Info.MaxFaceVertices = faceVerts
+		EndIf
+	EndIf
+End
+
+Function SkipOBJBufferSpaces:Int(buf:DataBuffer, start:Int, term:Int)
+	Local i:Int = start
+	While i < term And IsOBJWhite(buf.PeekByte(i))
+		i += 1
+	Wend
+	Return i
+End
+
+Function TrimOBJBufferRange:String(buf:DataBuffer, start:Int, term:Int)
+	Local i:Int = SkipOBJBufferSpaces(buf, start, term)
+	Local j:Int = term
+	While j > i And IsOBJWhite(buf.PeekByte(j - 1))
+		j -= 1
+	Wend
+	If j <= i Then Return ""
+	Return buf.PeekString(i, j - i)
+End
+
+Function ParseOBJNextFloatTokenBuffer:Int(buf:DataBuffer, start:Int, term:Int, outValue:Float[])
+	Local i:Int = SkipOBJBufferSpaces(buf, start, term)
+	If i >= term Then Return -1
+	Local j:Int = i
+	While j < term And Not IsOBJWhite(buf.PeekByte(j))
+		j += 1
+	Wend
+	outValue[0] = ParseFloatSafeOBJ(buf.PeekString(i, j - i))
+	Return j
+End
+
+Function ParseOBJVec2Buffer:Int(buf:DataBuffer, start:Int, term:Int, outVals:Float[])
+	If outVals.Length < 2 Then Return False
+	Local p:Int = ParseOBJNextFloatTokenBuffer(buf, start, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[0] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatTokenBuffer(buf, p, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[1] = OBJScratchFloat1[0]
+	Return True
+End
+
+Function ParseOBJVec3Buffer:Int(buf:DataBuffer, start:Int, term:Int, outVals:Float[])
+	If outVals.Length < 3 Then Return False
+	Local p:Int = ParseOBJNextFloatTokenBuffer(buf, start, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[0] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatTokenBuffer(buf, p, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[1] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatTokenBuffer(buf, p, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[2] = OBJScratchFloat1[0]
+	Return True
+End
+
+Function CountOBJFaceVertsBuffer:Int(buf:DataBuffer, start:Int, term:Int)
+	Local count:Int = 0
+	Local inTok:Int = 0
+	For Local i:Int = start Until term
+		Local ch:Int = buf.PeekByte(i)
+		If IsOBJWhite(ch)
+			inTok = 0
+		ElseIf Not inTok
+			count += 1
+			inTok = 1
+		EndIf
+	Next
+	Return count
+End
+
+Function ProcessOBJLargeDiskCacheBufferLine:Void(buf:DataBuffer, lineStart:Int, lineEnd:Int, cache:OBJLargeDiskCache, vfs:FileStream, ufs:FileStream, nfs:FileStream, objDir:String)
+	Local s:Int = SkipOBJBufferSpaces(buf, lineStart, lineEnd)
+	If s >= lineEnd Then Return
+	If buf.PeekByte(s) = 35 Then Return
+
+	If buf.PeekByte(s) = 109
+		If lineEnd - s >= 6 And buf.PeekByte(s + 1) = 116 And buf.PeekByte(s + 2) = 108 And buf.PeekByte(s + 3) = 108 And buf.PeekByte(s + 4) = 105 And buf.PeekByte(s + 5) = 98
+			If cache.Info.TexPath = "" Then cache.Info.TexPath = LoadFirstMTLTextureFromLib(objDir, TrimOBJBufferRange(buf, s + 6, lineEnd))
+		EndIf
+		Return
+	EndIf
+
+	If buf.PeekByte(s) = 118
+		If s + 1 < lineEnd
+			If IsOBJWhite(buf.PeekByte(s + 1))
+				If ParseOBJVec3Buffer(buf, s + 1, lineEnd, OBJScratchVec3)
+					vfs.WriteFloat(OBJScratchVec3[0])
+					vfs.WriteFloat(OBJScratchVec3[1])
+					vfs.WriteFloat(OBJScratchVec3[2])
+					cache.Info.VertexCount += 1
+					UpdateOBJLargeBounds(cache.Info, OBJScratchVec3[0], OBJScratchVec3[1], OBJScratchVec3[2])
+				EndIf
+				Return
+			ElseIf buf.PeekByte(s + 1) = 116 And s + 2 < lineEnd And IsOBJWhite(buf.PeekByte(s + 2))
+				If ParseOBJVec2Buffer(buf, s + 2, lineEnd, OBJScratchVec2)
+					ufs.WriteFloat(OBJScratchVec2[0])
+					ufs.WriteFloat(1.0 - OBJScratchVec2[1])
+					cache.Info.TexCoordCount += 1
+				EndIf
+				Return
+			ElseIf buf.PeekByte(s + 1) = 110 And s + 2 < lineEnd And IsOBJWhite(buf.PeekByte(s + 2))
+				If ParseOBJVec3Buffer(buf, s + 2, lineEnd, OBJScratchVec3)
+					nfs.WriteFloat(OBJScratchVec3[0])
+					nfs.WriteFloat(OBJScratchVec3[1])
+					nfs.WriteFloat(OBJScratchVec3[2])
+					cache.Info.NormalCount += 1
+				EndIf
+				Return
+			EndIf
+		EndIf
+	EndIf
+
+	If buf.PeekByte(s) = 102 And s + 1 < lineEnd And IsOBJWhite(buf.PeekByte(s + 1))
+		Local faceVerts:Int = CountOBJFaceVertsBuffer(buf, s + 1, lineEnd)
+		If faceVerts >= 3
+			cache.Info.FaceCount += 1
+			cache.Info.FaceVertexTotal += faceVerts
+			cache.Info.TriangleEstimate += faceVerts - 2
+			If faceVerts > cache.Info.MaxFaceVertices Then cache.Info.MaxFaceVertices = faceVerts
+		EndIf
+	EndIf
+End
+
+Function IsOBJWhite:Int(ch:Int)
+	Return ch = 32 Or ch = 9
+End
+
+Function IsOBJFaceBufferStart:Int(buf:DataBuffer, start:Int, term:Int)
+	Local s:Int = start
+	While s < term And IsOBJWhite(buf.PeekByte(s))
+		s += 1
+	Wend
+	If s >= term Then Return False
+	If buf.PeekByte(s) <> 102 Then Return False
+	If s + 1 >= term Then Return True
+	Return IsOBJWhite(buf.PeekByte(s + 1))
+End
+
+Function SkipOBJRangeSpaces:Int(src:String, start:Int, term:Int)
+	Local i:Int = start
+	While i < term And IsOBJWhite(src[i])
+		i += 1
+	Wend
+	Return i
+End
+
+Function TrimOBJRange:String(src:String, start:Int, term:Int)
+	Local i:Int = SkipOBJRangeSpaces(src, start, term)
+	Local j:Int = term
+	While j > i And IsOBJWhite(src[j - 1])
+		j -= 1
+	Wend
+	If j <= i Then Return ""
+	Return src[i..j]
+End
+
+Function ParseOBJNextFloatTokenRange:Int(src:String, start:Int, term:Int, outValue:Float[])
+	Local i:Int = SkipOBJRangeSpaces(src, start, term)
+	If i >= term Then Return -1
+	Local j:Int = i
+	While j < term And Not IsOBJWhite(src[j])
+		j += 1
+	Wend
+	outValue[0] = ParseFloatSafeOBJ(src[i..j])
+	Return j
+End
+
+Function ParseOBJVec2Range:Int(src:String, start:Int, term:Int, outVals:Float[])
+	If outVals.Length < 2 Then Return False
+	Local p:Int = ParseOBJNextFloatTokenRange(src, start, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[0] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatTokenRange(src, p, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[1] = OBJScratchFloat1[0]
+	Return True
+End
+
+Function ParseOBJVec3Range:Int(src:String, start:Int, term:Int, outVals:Float[])
+	If outVals.Length < 3 Then Return False
+	Local p:Int = ParseOBJNextFloatTokenRange(src, start, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[0] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatTokenRange(src, p, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[1] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatTokenRange(src, p, term, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[2] = OBJScratchFloat1[0]
+	Return True
+End
+
+Function CountOBJFaceVertsRange:Int(src:String, start:Int, term:Int)
+	Local count:Int = 0
+	Local inTok:Int = 0
+	For Local i:Int = start Until term
+		Local ch:Int = src[i]
+		If IsOBJWhite(ch)
+			inTok = 0
+		ElseIf Not inTok
+			count += 1
+			inTok = 1
+		EndIf
+	Next
+	Return count
+End
+
+Function ParseOBJNextFloatToken:Int(line:String, start:Int, outValue:Float[])
+	Local i:Int = start
+	While i < line.Length And line[i] = 32
+		i += 1
+	Wend
+	If i >= line.Length Then Return -1
+	Local j:Int = i
+	While j < line.Length And line[j] <> 32
+		j += 1
+	Wend
+	outValue[0] = ParseFloatSafeOBJ(line[i..j])
+	Return j
+End
+
+Function ParseOBJVec2Line:Int(line:String, start:Int, outVals:Float[])
+	If outVals.Length < 2 Then Return False
+	Local p:Int = ParseOBJNextFloatToken(line, start, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[0] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatToken(line, p, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[1] = OBJScratchFloat1[0]
+	Return True
+End
+
+Function ParseOBJVec3Line:Int(line:String, start:Int, outVals:Float[])
+	If outVals.Length < 3 Then Return False
+	Local p:Int = ParseOBJNextFloatToken(line, start, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[0] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatToken(line, p, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[1] = OBJScratchFloat1[0]
+	p = ParseOBJNextFloatToken(line, p, OBJScratchFloat1)
+	If p < 0 Then Return False
+	outVals[2] = OBJScratchFloat1[0]
+	Return True
+End
+
+Function ReadOBJTempVec3:Int(fs:FileStream, idx:Int, out:Float[])
+	If fs = Null Or idx < 0 Or out.Length < 3 Then Return False
+	Local pos:Int = idx * 12
+	If fs.Seek(pos) <> pos Then Return False
+	out[0] = fs.ReadFloat()
+	out[1] = fs.ReadFloat()
+	out[2] = fs.ReadFloat()
+	Return True
+End
+
+Function ReadOBJTempVec2:Int(fs:FileStream, idx:Int, out:Float[])
+	If fs = Null Or idx < 0 Or out.Length < 2 Then Return False
+	Local pos:Int = idx * 8
+	If fs.Seek(pos) <> pos Then Return False
+	out[0] = fs.ReadFloat()
+	out[1] = fs.ReadFloat()
+	Return True
+End
+
+Function IsOBJFiniteFloat:Int(v:Float)
+	If v <> v Then Return False
+	If v < -1.0e20 Or v > 1.0e20 Then Return False
+	Return True
+End
+
+Function Dist3SqIdxTemp:Float(vfs:FileStream, ia:Int, ib:Int)
+	If Not ReadOBJTempVec3(vfs, ia, OBJScratchVec3) Then Return 0.0
+	If Not ReadOBJTempVec3(vfs, ib, OBJScratchVec3B) Then Return 0.0
+	Local dx:Float = OBJScratchVec3[0] - OBJScratchVec3B[0]
+	Local dy:Float = OBJScratchVec3[1] - OBJScratchVec3B[1]
+	Local dz:Float = OBJScratchVec3[2] - OBJScratchVec3B[2]
+	Return dx * dx + dy * dy + dz * dz
+End
+
+Function EmitOBJVertexTemp:Int(surf:Surface, vcache:StringMap<Int>, vfs:FileStream, ufs:FileStream, nfs:FileStream, vi:Int, ti:Int, ni:Int, fnx:Float, fny:Float, fnz:Float)
+	If vi < 0 Then Return -1
+	Local key:String = vi + "/" + ti + "/" + ni
+	If vcache.Contains(key) Then Return vcache.Get(key)
+
+	If Not ReadOBJTempVec3(vfs, vi, OBJScratchVec3) Then Return -1
+
+	Local nx:Float = fnx, ny:Float = fny, nz:Float = fnz
+	If ni >= 0 And ReadOBJTempVec3(nfs, ni, OBJScratchVec3B)
+		nx = OBJScratchVec3B[0] ; ny = OBJScratchVec3B[1] ; nz = OBJScratchVec3B[2]
+	EndIf
+	Local uu:Float = 0.0, vv:Float = 0.0
+	If ti >= 0 And ReadOBJTempVec2(ufs, ti, OBJScratchVec2)
+		uu = OBJScratchVec2[0] ; vv = OBJScratchVec2[1]
+	EndIf
+
+	Local idx:Int = surf.NumVertices
+	If surf.NumVertices < 512 And (surf.NumVertices Mod 128) = 0
+		Local needBytes:Int = (surf.NumVertices + 1) * Surface.VertexSize
+		OBJDebugLog("diskmesh-addvertex-low", "s=" + OBJCurrentDiskSurfaceId + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles + "|vi=" + vi + "|ti=" + ti + "|ni=" + ni + "|need=" + needBytes + "|vbuf=" + surf.mVertices.Length() + "|ibuf=" + surf.mIndices.Length())
+		OBJDebugLog("diskmesh-addvertex-values", "s=" + OBJCurrentDiskSurfaceId + "|x=" + OBJScratchVec3[0] + "|y=" + OBJScratchVec3[1] + "|z=" + OBJScratchVec3[2] + "|nx=" + nx + "|ny=" + ny + "|nz=" + nz + "|u=" + uu + "|v=" + vv)
+	EndIf
+	If Not IsOBJFiniteFloat(OBJScratchVec3[0]) Or Not IsOBJFiniteFloat(OBJScratchVec3[1]) Or Not IsOBJFiniteFloat(OBJScratchVec3[2]) Or Not IsOBJFiniteFloat(nx) Or Not IsOBJFiniteFloat(ny) Or Not IsOBJFiniteFloat(nz) Or Not IsOBJFiniteFloat(uu) Or Not IsOBJFiniteFloat(vv)
+		OBJDebugLog("diskmesh-addvertex-invalid", "s=" + OBJCurrentDiskSurfaceId + "|vi=" + vi + "|ti=" + ti + "|ni=" + ni)
+		Return -1
+	EndIf
+	If surf.NumVertices >= 10000
+		Local probe:Int = surf.NumVertices / 250
+		If probe <> OBJLastAddVertexProbe
+			OBJLastAddVertexProbe = probe
+			OBJDebugLog("diskmesh-addvertex", "s=" + OBJCurrentDiskSurfaceId + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles + "|vi=" + vi + "|ti=" + ti + "|ni=" + ni)
+		EndIf
+	EndIf
+	surf.AddVertexFast(OBJScratchVec3[0], OBJScratchVec3[1], OBJScratchVec3[2], nx, ny, nz, vortex3.color.Color.White, uu, vv)
+	vcache.Set(key, idx)
+	Return idx
+End
+
+Function AddOBJTriToSurfaceTemp:Void(surf:Surface, vcache:StringMap<Int>, vfs:FileStream, ufs:FileStream, nfs:FileStream, vi0:Int, ti0:Int, ni0:Int, vi1:Int, ti1:Int, ni1:Int, vi2:Int, ti2:Int, ni2:Int)
+	If vi0 < 0 Or vi1 < 0 Or vi2 < 0 Or vi0 = vi1 Or vi0 = vi2 Or vi1 = vi2 Then Return
+	If Not ReadOBJTempVec3(vfs, vi0, OBJScratchVec3) Then Return
+	If Not ReadOBJTempVec3(vfs, vi1, OBJScratchVec3B) Then Return
+	If Not ReadOBJTempVec3(vfs, vi2, OBJScratchVec3C) Then Return
+	EnsureOBJSurfaceTempCapacity(surf, 3, 1)
+	Local ax:Float = OBJScratchVec3B[0] - OBJScratchVec3[0], ay:Float = OBJScratchVec3B[1] - OBJScratchVec3[1], az:Float = OBJScratchVec3B[2] - OBJScratchVec3[2]
+	Local bx:Float = OBJScratchVec3C[0] - OBJScratchVec3[0], by:Float = OBJScratchVec3C[1] - OBJScratchVec3[1], bz:Float = OBJScratchVec3C[2] - OBJScratchVec3[2]
+	Local nx:Float = ay * bz - az * by
+	Local ny:Float = az * bx - ax * bz
+	Local nz:Float = ax * by - ay * bx
+	Local ll:Float = Sqrt(nx * nx + ny * ny + nz * nz)
+	If ll > OBJFaceNormalEpsilon
+		nx /= ll
+		ny /= ll
+		nz /= ll
+	Else
+		nx = 0.0 ; ny = 1.0 ; nz = 0.0
+	EndIf
+	If surf.NumTriangles = 0 And surf.NumVertices < 16
+		OBJDebugLog("diskmesh-tri-begin", "s=" + OBJCurrentDiskSurfaceId + "|v=" + surf.NumVertices + "|vi0=" + vi0 + "|vi1=" + vi1 + "|vi2=" + vi2)
+	EndIf
+	Local a:Int = EmitOBJVertexTemp(surf, vcache, vfs, ufs, nfs, vi0, ti0, ni0, nx, ny, nz)
+	If surf.NumTriangles = 0 And surf.NumVertices < 16
+		OBJDebugLog("diskmesh-tri-a", "s=" + OBJCurrentDiskSurfaceId + "|a=" + a + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+	EndIf
+	Local b:Int = EmitOBJVertexTemp(surf, vcache, vfs, ufs, nfs, vi1, ti1, ni1, nx, ny, nz)
+	If surf.NumTriangles = 0 And surf.NumVertices < 16
+		OBJDebugLog("diskmesh-tri-b", "s=" + OBJCurrentDiskSurfaceId + "|b=" + b + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+	EndIf
+	Local c:Int = EmitOBJVertexTemp(surf, vcache, vfs, ufs, nfs, vi2, ti2, ni2, nx, ny, nz)
+	If surf.NumTriangles = 0 And surf.NumVertices < 16
+		OBJDebugLog("diskmesh-tri-c", "s=" + OBJCurrentDiskSurfaceId + "|c=" + c + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+	EndIf
+	If a >= 0 And b >= 0 And c >= 0
+		If surf.NumTriangles = 0 And surf.NumVertices < 16
+			OBJDebugLog("diskmesh-tri-add-before", "s=" + OBJCurrentDiskSurfaceId + "|a=" + a + "|b=" + b + "|c=" + c + "|v=" + surf.NumVertices)
+		EndIf
+		surf.AddTriangle(a, b, c)
+		If surf.NumTriangles <= 1 And surf.NumVertices < 16
+			OBJDebugLog("diskmesh-tri-add-after", "s=" + OBJCurrentDiskSurfaceId + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+		EndIf
+	EndIf
+End
+
+Function AddOBJQuadToSurfaceFastTemp:Void(surf:Surface, vcache:StringMap<Int>, vfs:FileStream, ufs:FileStream, nfs:FileStream, a:Int[], b:Int[], c:Int[], d:Int[])
+	Local dac:Float = Dist3SqIdxTemp(vfs, a[0], c[0])
+	Local dbd:Float = Dist3SqIdxTemp(vfs, b[0], d[0])
+	If dac <= dbd
+		AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
+		AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2])
+	Else
+		AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, a[0], a[1], a[2], b[0], b[1], b[2], d[0], d[1], d[2])
+		AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, b[0], b[1], b[2], c[0], c[1], c[2], d[0], d[1], d[2])
+	EndIf
+End
+
+Function AddOBJNgonToSurfaceTemp:Void(surf:Surface, vcache:StringMap<Int>, vfs:FileStream, ufs:FileStream, nfs:FileStream, bits:String[], vc:Int, tc:Int, nc:Int)
+	Local fa:Int[] = New Int[3]
+	Local fvi:IntStack = New IntStack
+	Local fti:IntStack = New IntStack
+	Local fni:IntStack = New IntStack
+	For Local i:Int = 1 Until bits.Length
+		ParseOBJFaceTokenInto(bits[i], vc, tc, nc, fa)
+		fvi.Push(fa[0])
+		fti.Push(fa[1])
+		fni.Push(fa[2])
+	Next
+	If fvi.Length >= 4 And fvi.Get(0) = fvi.Get(fvi.Length - 1)
+		fvi.Length -= 1
+		fti.Length -= 1
+		fni.Length -= 1
+	EndIf
+	For Local i:Int = 1 Until fvi.Length - 1
+		AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, fvi.Get(0), fti.Get(0), fni.Get(0), fvi.Get(i), fti.Get(i), fni.Get(i), fvi.Get(i + 1), fti.Get(i + 1), fni.Get(i + 1))
+	Next
+End
+
+Function ReserveOBJSurfaceTemp:Void(surf:Surface, maxVerts:Int)
+	If surf = Null Then Return
+	If maxVerts < 1024 Then maxVerts = 1024
+	Local reserveVerts:Int = maxVerts
+	If reserveVerts > 2048 Then reserveVerts = 2048
+	surf.Reserve(reserveVerts, reserveVerts * 3)
+	OBJDebugLog("diskmesh-surface-capacity", "s=" + OBJCurrentDiskSurfaceId + "|vbuf=" + surf.mVertices.Length() + "|ibuf=" + surf.mIndices.Length() + "|targetv=" + maxVerts + "|reservev=" + reserveVerts)
+End
+
+Function EnsureOBJSurfaceTempCapacity:Void(surf:Surface, extraVerts:Int, extraTris:Int)
+	If surf = Null Then Return
+
+	Local needVerts:Int = surf.NumVertices + extraVerts
+	Local needIndices:Int = (surf.NumTriangles + extraTris) * 3
+	Local currentVertCap:Int = surf.mVertices.Length() / Surface.VertexSize
+	Local currentIndexCap:Int = surf.mIndices.Length() / 2
+
+	If currentVertCap >= needVerts And currentIndexCap >= needIndices Then Return
+
+	Local newVertCap:Int = currentVertCap
+	If newVertCap < 1024 Then newVertCap = 1024
+	While newVertCap < needVerts
+		newVertCap *= 2
+	Wend
+
+	Local newIndexCap:Int = currentIndexCap
+	If newIndexCap < 3072 Then newIndexCap = 3072
+	While newIndexCap < needIndices
+		newIndexCap *= 2
+	Wend
+
+	surf.Reserve(newVertCap, newIndexCap)
+	OBJDebugLog("diskmesh-capacity-grow", "s=" + OBJCurrentDiskSurfaceId + "|vcap=" + newVertCap + "|icap=" + newIndexCap + "|needv=" + needVerts + "|needi=" + needIndices)
+End
+
+Function LoadOBJMeshDiskBacked:Mesh(path:String, cache:OBJLargeDiskCache)
+	If cache = Null Or cache.Info = Null Then Return Null
+	path = path.Replace("\", "/")
+	OBJDebugLog("diskmesh-enter", path)
+
+	Local vfs:FileStream = FileStream.Open(cache.VertPath, "r")
+	Local ufs:FileStream = FileStream.Open(cache.UVPath, "r")
+	Local nfs:FileStream = FileStream.Open(cache.NrmPath, "r")
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not vfs Or Not ufs Or Not nfs Or Not fs
+		If vfs Then vfs.Close()
+		If ufs Then ufs.Close()
+		If nfs Then nfs.Close()
+		If fs Then fs.Close()
+		OBJImportLastError = "Unable to reopen OBJ disk cache."
+		OBJDebugLog("diskmesh-open-fail", path)
+		Return Null
+	EndIf
+
+	Local fa:Int[] = New Int[3]
+	Local fb:Int[] = New Int[3]
+	Local fc:Int[] = New Int[3]
+	Local fd:Int[] = New Int[3]
+	Local vcache:StringMap<Int> = New StringMap<Int>
+	Local surf:Surface = New Surface
+	Local mesh:Mesh = New Mesh
+	Local flushedSurfaces:Int = 0
+	Local parsedLines:Int = 0
+	Local maxSurfVertices:Int = 60000
+	If OBJMaxSurfVerticesOverride > 0 Then maxSurfVertices = OBJMaxSurfVerticesOverride
+	Local mat:material.Material = CreateOBJDefaultMaterial(cache.Info.TexPath)
+	ReserveOBJSurfaceTemp(surf, maxSurfVertices)
+	OBJCurrentDiskSurfaceId = 0
+	OBJLastAddVertexProbe = -1
+	OBJDebugLog("diskmesh-surface-start", "s=0|line=0")
+
+	Local chunkSize:Int = 262144
+	Local buf:DataBuffer = New DataBuffer(chunkSize)
+	Local carry:String = ""
+	Local readn:Int = 0
+	Local firstFaceLogged:Int = False
+
+	Repeat
+		readn = fs.Read(buf, 0, chunkSize)
+		If readn <= 0 Then Exit
+
+		Local lineStart:Int = 0
+		Local i:Int = 0
+		While i < readn
+			Local ch:Int = buf.PeekByte(i)
+			If ch = 10 Or ch = 13
+				Local line:String = ""
+				Local useLine:Int = False
+				If carry <> ""
+					If i > lineStart Then
+						line = carry + buf.PeekString(lineStart, i - lineStart)
+					Else
+						line = carry
+					EndIf
+					carry = ""
+					useLine = True
+				ElseIf IsOBJFaceBufferStart(buf, lineStart, i)
+					If i > lineStart Then line = buf.PeekString(lineStart, i - lineStart)
+					useLine = True
+				EndIf
+				If useLine
+					line = NormalizeOBJLine(line)
+				EndIf
+				If useLine And line <> "" And Not line.StartsWith("#") And line.StartsWith("f ")
+					Local vc:Int = cache.Info.VertexCount
+					Local tc:Int = cache.Info.TexCoordCount
+					Local nc:Int = cache.Info.NormalCount
+					Local faceTokCount:Int = ParseOBJFaceLineBasic(line, vc, tc, nc, fa, fb, fc, fd)
+					If faceTokCount >= 3
+						If Not firstFaceLogged
+							OBJDebugLog("diskmesh-first-face", "lines=" + parsedLines + "|text=" + faceTokCount)
+							firstFaceLogged = True
+						EndIf
+						If surf.NumTriangles = 0
+							OBJDebugLog("diskmesh-surface-first-face", "s=" + OBJCurrentDiskSurfaceId + "|line=" + parsedLines + "|fv=" + faceTokCount)
+						EndIf
+						If faceTokCount > 4
+							OBJDebugLog("diskmesh-ngon", "s=" + OBJCurrentDiskSurfaceId + "|line=" + parsedLines + "|fv=" + faceTokCount + "|surfv=" + surf.NumVertices + "|surft=" + surf.NumTriangles)
+						EndIf
+						Local faceVerts:Int = faceTokCount
+						If surf.NumVertices > 0 And surf.NumVertices + faceVerts >= maxSurfVertices And surf.NumTriangles > 0
+							OBJDebugLog("diskmesh-flush-before", "s=" + flushedSurfaces + "|line=" + parsedLines + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+							OBJDebugLog("diskmesh-addsurface-before", "s=" + flushedSurfaces + "|mesh=" + mesh.NumSurfaces)
+							mesh.AddSurface(surf, mat, False)
+							OBJDebugLog("diskmesh-addsurface-after", "s=" + flushedSurfaces + "|mesh=" + mesh.NumSurfaces)
+							flushedSurfaces += 1
+							OBJDebugLog("diskmesh-flush-after", "s=" + flushedSurfaces)
+							surf = New Surface
+							ReserveOBJSurfaceTemp(surf, maxSurfVertices)
+							vcache = New StringMap<Int>
+							OBJCurrentDiskSurfaceId = flushedSurfaces
+							OBJLastAddVertexProbe = -1
+							OBJDebugLog("diskmesh-surface-start", "s=" + OBJCurrentDiskSurfaceId + "|line=" + parsedLines)
+						EndIf
+
+						If faceTokCount = 3
+							AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+						ElseIf faceTokCount = 4
+							If fa[0] = fd[0]
+								AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+							Else
+								AddOBJQuadToSurfaceFastTemp(surf, vcache, vfs, ufs, nfs, fa, fb, fc, fd)
+							EndIf
+						Else
+							Local bits:String[] = line.Split(" ")
+							AddOBJNgonToSurfaceTemp(surf, vcache, vfs, ufs, nfs, bits, vc, tc, nc)
+						EndIf
+					EndIf
+				EndIf
+				parsedLines += 1
+				If (parsedLines Mod 50000) = 0 Then OBJDebugLog("diskmesh-progress", "lines=" + parsedLines + "|surfaces=" + flushedSurfaces + "|surfv=" + surf.NumVertices + "|surft=" + surf.NumTriangles)
+				i += 1
+				While i < readn
+					ch = buf.PeekByte(i)
+					If ch <> 10 And ch <> 13 Then Exit
+					i += 1
+				Wend
+				lineStart = i
+			Else
+				i += 1
+			EndIf
+		Wend
+
+		If lineStart < readn And IsOBJFaceBufferStart(buf, lineStart, readn)
+			carry = buf.PeekString(lineStart, readn - lineStart)
+		Else
+			carry = ""
+		EndIf
+	Forever
+
+	If carry <> ""
+		carry = NormalizeOBJLine(carry)
+		If carry <> "" And Not carry.StartsWith("#") And carry.StartsWith("f ")
+			Local vc:Int = cache.Info.VertexCount
+			Local tc:Int = cache.Info.TexCoordCount
+			Local nc:Int = cache.Info.NormalCount
+			Local faceTokCount:Int = ParseOBJFaceLineBasic(carry, vc, tc, nc, fa, fb, fc, fd)
+			If faceTokCount >= 3
+				If Not firstFaceLogged
+					OBJDebugLog("diskmesh-first-face", "lines=" + parsedLines + "|text=" + faceTokCount)
+					firstFaceLogged = True
+				EndIf
+				If surf.NumTriangles = 0
+					OBJDebugLog("diskmesh-surface-first-face", "s=" + OBJCurrentDiskSurfaceId + "|line=" + parsedLines + "|fv=" + faceTokCount)
+				EndIf
+				If faceTokCount > 4
+					OBJDebugLog("diskmesh-ngon", "s=" + OBJCurrentDiskSurfaceId + "|line=" + parsedLines + "|fv=" + faceTokCount + "|surfv=" + surf.NumVertices + "|surft=" + surf.NumTriangles)
+				EndIf
+				Local faceVerts:Int = faceTokCount
+				If surf.NumVertices > 0 And surf.NumVertices + faceVerts >= maxSurfVertices And surf.NumTriangles > 0
+					OBJDebugLog("diskmesh-flush-before", "s=" + flushedSurfaces + "|line=" + parsedLines + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+					OBJDebugLog("diskmesh-addsurface-before", "s=" + flushedSurfaces + "|mesh=" + mesh.NumSurfaces)
+					mesh.AddSurface(surf, mat, False)
+					OBJDebugLog("diskmesh-addsurface-after", "s=" + flushedSurfaces + "|mesh=" + mesh.NumSurfaces)
+					flushedSurfaces += 1
+					OBJDebugLog("diskmesh-flush-after", "s=" + flushedSurfaces)
+					surf = New Surface
+					ReserveOBJSurfaceTemp(surf, maxSurfVertices)
+					vcache = New StringMap<Int>
+					OBJCurrentDiskSurfaceId = flushedSurfaces
+					OBJLastAddVertexProbe = -1
+					OBJDebugLog("diskmesh-surface-start", "s=" + OBJCurrentDiskSurfaceId + "|line=" + parsedLines)
+				EndIf
+
+				If faceTokCount = 3
+					AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+				ElseIf faceTokCount = 4
+					If fa[0] = fd[0]
+						AddOBJTriToSurfaceTemp(surf, vcache, vfs, ufs, nfs, fa[0], fa[1], fa[2], fb[0], fb[1], fb[2], fc[0], fc[1], fc[2])
+					Else
+						AddOBJQuadToSurfaceFastTemp(surf, vcache, vfs, ufs, nfs, fa, fb, fc, fd)
+					EndIf
+				Else
+					Local bits:String[] = carry.Split(" ")
+					AddOBJNgonToSurfaceTemp(surf, vcache, vfs, ufs, nfs, bits, vc, tc, nc)
+				EndIf
+			EndIf
+		EndIf
+		parsedLines += 1
+		If (parsedLines Mod 50000) = 0 Then OBJDebugLog("diskmesh-progress", "lines=" + parsedLines + "|surfaces=" + flushedSurfaces + "|surfv=" + surf.NumVertices + "|surft=" + surf.NumTriangles)
+	EndIf
+
+	fs.Close()
+	vfs.Close()
+	ufs.Close()
+	nfs.Close()
+
+	OBJDebugLog("diskmesh-after-parse", "lines=" + parsedLines + "|surfaces=" + flushedSurfaces + "|lastv=" + surf.NumVertices + "|lastt=" + surf.NumTriangles)
+	If surf.NumTriangles > 0
+		OBJDebugLog("diskmesh-final-surface-before", "s=" + flushedSurfaces + "|v=" + surf.NumVertices + "|t=" + surf.NumTriangles)
+		OBJDebugLog("diskmesh-final-addsurface-before", "s=" + flushedSurfaces + "|mesh=" + mesh.NumSurfaces)
+		mesh.AddSurface(surf, mat, False)
+		OBJDebugLog("diskmesh-final-addsurface-after", "s=" + flushedSurfaces + "|mesh=" + mesh.NumSurfaces)
+		flushedSurfaces += 1
+		OBJDebugLog("diskmesh-final-surface-after", "s=" + flushedSurfaces)
+	EndIf
+	If mesh.NumSurfaces <= 0
+		OBJImportLastError = "OBJ imported but produced 0 triangles: " + path
+		Return Null
+	EndIf
+	OBJDebugLog("diskmesh-rebuild-before", "surfaces=" + mesh.NumSurfaces)
+	mesh.Rebuild()
+	OBJDebugLog("diskmesh-rebuild-after", "surfaces=" + mesh.NumSurfaces)
+	Return mesh
+End
+
+
+Function UpdateOBJLargeBounds:Void(info:OBJLargeScanInfo, x:Float, y:Float, z:Float)
+	If info.BoundsReady = 0
+		info.BoundsReady = 1
+		info.MinX = x ; info.MinY = y ; info.MinZ = z
+		info.MaxX = x ; info.MaxY = y ; info.MaxZ = z
+		Return
+	EndIf
+	If x < info.MinX Then info.MinX = x Else If x > info.MaxX Then info.MaxX = x
+	If y < info.MinY Then info.MinY = y Else If y > info.MaxY Then info.MaxY = y
+	If z < info.MinZ Then info.MinZ = z Else If z > info.MaxZ Then info.MaxZ = z
+End
+
+Function CountOBJFaceVerts:Int(line:String)
+	Local count:Int = 0
+	Local inTok:Int = 0
+	For Local i:Int = 2 Until line.Length
+		Local ch:Int = line[i]
+		If ch = 32
+			inTok = 0
+		ElseIf Not inTok
+			count += 1
+			inTok = 1
+		EndIf
+	Next
+	Return count
+End
+
+Function ScanOBJLargeFile:OBJLargeScanInfo(path:String, objDir:String)
+	Local fs:FileStream = FileStream.Open(path, "r")
+	If Not fs Then OBJImportLastError = "Unable to load OBJ: " + path; Return Null
+	Local info:OBJLargeScanInfo = New OBJLargeScanInfo
+	info.FileLen = fs.Length
+	While Not fs.Eof
+		Local line:String = NormalizeOBJLine(fs.ReadLine())
+		If line = "" Or line.StartsWith("#") Then Continue
+
+		If line.StartsWith("v ") Then
+			info.VertexCount += 1
+		ElseIf line.StartsWith("vt ") Then
+			info.TexCoordCount += 1
+		ElseIf line.StartsWith("vn ") Then
+			info.NormalCount += 1
+		ElseIf line.StartsWith("f ") Then
+			
+			Local faceVerts:Int = CountOBJFaceVerts(line)
+
+			If faceVerts >= 3 Then
+				info.FaceCount += 1
+				info.FaceVertexTotal += faceVerts
+				info.TriangleEstimate += faceVerts - 2
+			
+				If faceVerts > info.MaxFaceVertices Then info.MaxFaceVertices = faceVerts
+
+			EndIf
+
+		EndIf
+	Wend
+	fs.Close()
+	Return info
+End
+
+Function GetOBJLargeSafetyReason:String(info:OBJLargeScanInfo)
+	If info.VertexCount > OBJLargeSafeMaxSourceVertices Then Return "source vertices " + info.VertexCount + " > " + OBJLargeSafeMaxSourceVertices
+	If info.FaceVertexTotal > OBJLargeSafeMaxFaceVertices Then Return "face vertices " + info.FaceVertexTotal + " > " + OBJLargeSafeMaxFaceVertices
+	If info.TriangleEstimate > OBJLargeSafeMaxTriangles Then Return "triangles " + info.TriangleEstimate + " > " + OBJLargeSafeMaxTriangles
+	Return ""
+End
+
+Function LoadFirstMTLTextureFromLib:String(objDir:String, mtlRel:String)
+	Local mtlPath:String = JoinOBJPath(objDir, mtlRel)
+	Local data:DataBuffer = DataBuffer.Load(mtlPath)
+	If Not data Then Return ""
+	Local baseDir:String = os.ExtractDir(mtlPath).Replace("\", "/")
+	Local pos:Int = 0
+	Local len:Int = data.Length
+	While pos < len
+		Local start:Int = pos
+		While pos < len And data.PeekByte(pos) <> 10 And data.PeekByte(pos) <> 13
+			pos += 1
+		Wend
+		Local line:String = ""
+		If pos > start Then line = data.PeekString(start, pos - start)
+		While pos < len And (data.PeekByte(pos) = 10 Or data.PeekByte(pos) = 13)
+			pos += 1
+		Wend
+		line = NormalizeOBJLine(line)
+		If line.StartsWith("map_Kd ")
+			data.Discard()
+			Return JoinOBJPath(baseDir, line[7..].Trim())
+		EndIf
+	Wend
+	data.Discard()
+	Return ""
+End
+
+' Legge il colore diffuso Kd (e l'opacita' d / Tr) di un materiale dal .mtl e
+' lo applica al Material vortexc.
+'
+' L'importer guardava solo map_Kd, cioe' le texture. Un .mtl senza texture, che
+' colora la mesh con i soli Kd per materiale, veniva quindi importato tutto
+' bianco. Material.Color arriva allo shader come uniform Material.Color
+' (material.cxs -> Renderer.Color -> shader.cxs), quindi tinge la surface.
+Function ApplyOBJMaterialColorFromLib:Void(mat:material.Material, objDir:String, mtlRel:String, materialName:String)
+	If mat = Null Or materialName = "" Then Return
+	Local mtlPath:String = JoinOBJPath(objDir, mtlRel)
+	Local data:DataBuffer = DataBuffer.Load(mtlPath)
+	If Not data Then Return
+
+	Local pos:Int = 0
+	Local len:Int = data.Length
+	Local active:Int = False
+	Local found:Int = False
+	Local r:Float = 1.0, g:Float = 1.0, b:Float = 1.0, a:Float = 1.0
+
+	While pos < len
+		Local start:Int = pos
+		While pos < len And data.PeekByte(pos) <> 10 And data.PeekByte(pos) <> 13
+			pos += 1
+		Wend
+		Local line:String = ""
+		If pos > start Then line = data.PeekString(start, pos - start)
+		While pos < len And (data.PeekByte(pos) = 10 Or data.PeekByte(pos) = 13)
+			pos += 1
+		Wend
+		line = NormalizeOBJLine(line)
+		If line = "" Or line.StartsWith("#") Then Continue
+
+		If line.StartsWith("newmtl ")
+			If active Then Exit
+			If line[7..].Trim() = materialName Then active = True
+			Continue
+		EndIf
+		If Not active Then Continue
+
+		Local bits:String[] = line.Split(" ")
+		If bits.Length < 2 Then Continue
+		Select bits[0]
+			Case "Kd"
+				If bits.Length >= 4
+					r = ParseFloatSafeOBJ(bits[1])
+					g = ParseFloatSafeOBJ(bits[2])
+					b = ParseFloatSafeOBJ(bits[3])
+					found = True
+				EndIf
+			Case "d"
+				a = ParseFloatSafeOBJ(bits[1])
+			Case "Tr"
+				' Tr e' l'opposto di d: alcuni esportatori usano l'uno, altri l'altro.
+				a = 1.0 - ParseFloatSafeOBJ(bits[1])
+		End
+	Wend
+	data.Discard()
+
+	If Not found Then Return
+	If a < 0.0 Then a = 0.0
+	If a > 1.0 Then a = 1.0
+	mat.Color = vortex3.color.Color.RGB(OBJColorByte(r), OBJColorByte(g), OBJColorByte(b), OBJColorByte(a))
+	If a < 0.99 Then mat.BlendMode = 1
+End
+
+Function OBJColorByte:Int(v:Float)
+	Local i:Int = Int(v * 255.0 + 0.5)
+	If i < 0 Then i = 0
+	If i > 255 Then i = 255
+	Return i
+End
+
+Function LoadOBJMaterialTextureFromLib:String(objDir:String, mtlRel:String, materialName:String)
+	If materialName = "" Then Return ""
+	Local mtlPath:String = JoinOBJPath(objDir, mtlRel)
+	Local data:DataBuffer = DataBuffer.Load(mtlPath)
+	If Not data Then Return ""
+	Local baseDir:String = os.ExtractDir(mtlPath).Replace("\", "/")
+	Local pos:Int = 0
+	Local len:Int = data.Length
+	Local active:Int = False
+	While pos < len
+		Local start:Int = pos
+		While pos < len And data.PeekByte(pos) <> 10 And data.PeekByte(pos) <> 13
+			pos += 1
+		Wend
+		Local line:String = ""
+		If pos > start Then line = data.PeekString(start, pos - start)
+		While pos < len And (data.PeekByte(pos) = 10 Or data.PeekByte(pos) = 13)
+			pos += 1
+		Wend
+		line = NormalizeOBJLine(line)
+		If line.StartsWith("newmtl ")
+			active = line[7..].Trim() = materialName
+		ElseIf active And line.StartsWith("map_Kd ")
+			data.Discard()
+			Return JoinOBJPath(baseDir, line[7..].Trim())
+		EndIf
+	Wend
+	data.Discard()
+	Return ""
+End
+
+Function CreateOBJDefaultMaterial:material.Material(texPath:String)
+	Local mat:material.Material = New material.Material
+	mat.Culling = False
+	mat.DepthWrite = True
+	mat.Lighting = True
+	mat.CastShadows = True
+	mat.ReceiveShadows = True
+	mat.Fog = True
+	mat.BlendMode = 0
+	mat.Shininess = 0
+	mat.RefractionCoef = -1
+	mat.SpecularPower = 64
+	mat.CubeOpacity = 0.5
+	If texPath <> "" Then mat.ColorTexture = LoadOBJTextureWithFallback(texPath)
+	Return mat
+End
+
+Function LoadOBJTextureWithFallback:texture.Texture(texPath:String)
+	If texPath = "" Then Return Null
+
+	Local loadPath:String = texPath.Trim()
+	Local dq:String = String.FromChar(34)
+	If loadPath.StartsWith(dq) And loadPath.EndsWith(dq) And loadPath.Length > 1
+		loadPath = loadPath[1..loadPath.Length - 1].Trim()
+	EndIf
+
+	Local nativePath:String = loadPath.Replace("/", "\")
+	If os.FileType(loadPath) <> os.FILETYPE_FILE And os.FileType(nativePath) = os.FILETYPE_FILE
+		loadPath = nativePath
+		OBJImportLastWarning = "Texture presente ma caricata solo con path nativo: " + nativePath
+	EndIf
+
+	If os.FileType(loadPath) <> os.FILETYPE_FILE Then Return Null
+
+	Local texBytes:Int = os.FileSize(loadPath)
+   
+	If 1 = 10 Then
+		If OBJTextureLoadMaxBytes > 0 And texBytes > OBJTextureLoadMaxBytes
+			OBJImportLastWarning = "Texture OBJ troppo grande, salto caricamento: " + loadPath + " (" + texBytes + " bytes)"
+			OBJDebugLog("tex-skip", loadPath + "|bytes=" + texBytes)
+			Return Null
+		EndIf
+	EndIf
+	
+	OBJDebugLog("tex-load", loadPath + "|bytes=" + texBytes)
+	Local tex:texture.Texture = LoadModelTextureFile(loadPath, 3)
+	If tex = Null
+		OBJImportLastWarning = "Texture non caricata: " + loadPath
+		OBJDebugLog("tex-fail", loadPath)
+	Else
+		OBJDebugLog("tex-ok", loadPath + "|" + tex.Width + "x" + tex.Height)
+	EndIf
+	Return tex
+End
+
+' Carica una texture da un path qualsiasi del disco.
+'
+' texture.Texture.Load() passa da Renderer.LoadTexture, che prima di caricare
+' fa un "trick to get texture size" con LoadImage di mojo1 solo per leggere
+' larghezza e altezza; se quella chiamata fallisce ritorna 0 e la texture
+' diventa Null, anche quando l'upload GL vero e proprio funzionerebbe. In piu'
+' quel giro carica l'immagine due volte.
+'
+' Qui i byte del file si leggono direttamente e si passano a LoadEncodedMemory,
+' che decodifica con stb_image forzando 4 canali (quindi va bene anche per i
+' PNG a 3 canali). Se per qualche motivo non riesce, si ricade sul percorso
+' originale, che resta invariato.
+Function LoadModelTextureFile:texture.Texture(path:String, filter:Int = 3)
+	If path = "" Then Return Null
+
+	Local encoded:DataBuffer = DataBuffer.Load(path)
+	If encoded <> Null
+		Local tex:texture.Texture = texture.Texture.LoadEncodedMemory(encoded, filter, path)
+		encoded.Discard()
+		If tex <> Null Then Return tex
+	EndIf
+
+	Return texture.Texture.Load(path, filter)
+End
+
+Function AddOBJProxyQuad:Void(surf:Surface, ax:Float, ay:Float, az:Float, bx:Float, by:Float, bz:Float, cx:Float, cy:Float, cz:Float, dx:Float, dy:Float, dz:Float, nx:Float, ny:Float, nz:Float, tx:Float, ty:Float, tz:Float)
+	Local base:Int = surf.NumVertices
+	surf.AddVertex(ax, ay, az, nx, ny, nz, vortex3.color.Color.White, 0, 0)
+	surf.VertexTangent(base, tx, ty, tz)
+	surf.AddVertex(bx, by, bz, nx, ny, nz, vortex3.color.Color.White, 1, 0)
+	surf.VertexTangent(base + 1, tx, ty, tz)
+	surf.AddVertex(cx, cy, cz, nx, ny, nz, vortex3.color.Color.White, 0, 1)
+	surf.VertexTangent(base + 2, tx, ty, tz)
+	surf.AddVertex(dx, dy, dz, nx, ny, nz, vortex3.color.Color.White, 1, 1)
+	surf.VertexTangent(base + 3, tx, ty, tz)
+	surf.AddTriangle(base, base + 1, base + 2)
+	surf.AddTriangle(base + 3, base + 2, base + 1)
+End
+
+Function CreateOBJFileSizeProxyMesh:Mesh(path:String, fileLen:Int)
+	OBJImportLastWarning = "Large OBJ imported as safe proxy by file size: " + fileLen + " bytes"
+	OBJDebugLog("size-proxy", path + "|len=" + fileLen)
+	Return Mesh.CreateCube(CreateOBJDefaultMaterial(""))
+End
+
+Function CreateOBJBoundsProxyMesh:Mesh(info:OBJLargeScanInfo, reason:String)
+	Local minX:Float = info.MinX
+	Local minY:Float = info.MinY
+	Local minZ:Float = info.MinZ
+	Local maxX:Float = info.MaxX
+	Local maxY:Float = info.MaxY
+	Local maxZ:Float = info.MaxZ
+	If maxX <= minX Then maxX = minX + 1.0
+	If maxY <= minY Then maxY = minY + 1.0
+	If maxZ <= minZ Then maxZ = minZ + 1.0
+	Local surf:Surface = New Surface
+	AddOBJProxyQuad(surf, minX, maxY, minZ, maxX, maxY, minZ, minX, minY, minZ, maxX, minY, minZ, 0, 0, -1, 1, 0, 0)
+	AddOBJProxyQuad(surf, maxX, maxY, maxZ, minX, maxY, maxZ, maxX, minY, maxZ, minX, minY, maxZ, 0, 0, 1, -1, 0, 0)
+	AddOBJProxyQuad(surf, minX, maxY, maxZ, minX, maxY, minZ, minX, minY, maxZ, minX, minY, minZ, -1, 0, 0, 0, 0, -1)
+	AddOBJProxyQuad(surf, maxX, maxY, minZ, maxX, maxY, maxZ, maxX, minY, minZ, maxX, minY, maxZ, 1, 0, 0, 0, 0, 1)
+	AddOBJProxyQuad(surf, minX, maxY, maxZ, maxX, maxY, maxZ, minX, maxY, minZ, maxX, maxY, minZ, 0, 1, 0, 1, 0, 0)
+	AddOBJProxyQuad(surf, minX, minY, minZ, maxX, minY, minZ, minX, minY, maxZ, maxX, minY, maxZ, 0, -1, 0, 1, 0, 0)
+	Local mesh:Mesh = New Mesh
+	mesh.AddSurface(surf, CreateOBJDefaultMaterial(info.TexPath))
+	mesh.Rebuild()
+	OBJImportLastWarning = "Large OBJ imported as bounding-box proxy: " + reason
+	Return mesh
+End
+
+Function Dist3SqIdx:Float(verts:FloatStack, ia:Int, ib:Int)
+	Local oa:Int = ia * 3, ob:Int = ib * 3
+	Local dx:Float = verts.Get(oa) - verts.Get(ob)
+	Local dy:Float = verts.Get(oa + 1) - verts.Get(ob + 1)
+	Local dz:Float = verts.Get(oa + 2) - verts.Get(ob + 2)
+	Return dx * dx + dy * dy + dz * dz
+End
+
+Function FindFirstOBJTexture:String(objPath:String)
+	Local objDir:String = os.ExtractDir(objPath).Replace("\", "/")
+	Local data:DataBuffer = DataBuffer.Load(objPath)
+	If Not data Then Return ""
+	Local pos:Int = 0
+	Local len:Int = data.Length
+	While pos < len
+		Local start:Int = pos
+		While pos < len And data.PeekByte(pos) <> 10 And data.PeekByte(pos) <> 13
+			pos += 1
+		Wend
+		Local line:String = ""
+		If pos > start Then line = data.PeekString(start, pos - start)
+		While pos < len And (data.PeekByte(pos) = 10 Or data.PeekByte(pos) = 13)
+			pos += 1
+		Wend
+		line = NormalizeOBJLine(line)
+		If line.StartsWith("mtllib ")
+			Local texPath:String = LoadFirstMTLTextureFromLib(objDir, line[7..].Trim())
+			data.Discard()
+			Return texPath
+		EndIf
+	Wend
+	data.Discard()
+	Return ""
+End
+
+Function JoinOBJPath:String(baseDir:String, rel:String)
+	rel = rel.Replace("\", "/").Trim()
+	If rel = "" Then Return ""
+	If rel.Length > 1 And String.FromChar(rel[1]) = ":" Then Return rel
+	If rel.StartsWith("/") Then Return rel
+	If baseDir = "" Then Return rel
+	Return baseDir + "/" + rel
+End
+
+Function NormalizeOBJLine:String(line:String)
+	line = line.Replace("~r", "")
+	line = line.Replace("~t", " ")
+	line = line.Trim()
+	While line.Find("  ") <> -1
+		line = line.Replace("  ", " ")
+	Wend
+	Return line
+End
+
+Function ResolveOBJIndex:Int(idx:Int, count:Int)
+	If idx > 0 Then Return idx - 1
+	If idx < 0 Then Return count + idx
+	Return -1
+End
+
+Function ParseIntSafeOBJ:Int(s:String)
+	s = s.Trim()
+	If s = "" Then Return 0
+	
+	Local sign:Int = 1
+	Local i:Int = 0
+	Local n:Int = 0
+	
+	If s.Length > 0
+		If s[i] = 45 Then sign = -1; i += 1
+		If i < s.Length And s[i] = 43 Then i += 1
+	EndIf
+	
+	While i < s.Length
+		Local ch:Int = s[i]
+		If ch < 48 Or ch > 57 Then Exit
+		n = n * 10 + (ch - 48)
+		i += 1
+	Wend
+	
+	Return n * sign
+End
+
+Function ParseFloatSafeOBJ:Float(s:String)
+	s = s.Trim()
+	If s = "" Then Return 0.0
+	Local sign:Float = 1.0
+	Local i:Int = 0
+	If s.Length > 0
+		If s[i] = 45 Then sign = -1.0; i += 1
+		If i < s.Length And s[i] = 43 Then i += 1
+	EndIf
+	Local iv:Float = 0.0
+	While i < s.Length
+		Local ch:Int = s[i]
+		If ch < 48 Or ch > 57 Then Exit
+		iv = iv * 10.0 + (ch - 48)
+		i += 1
+	Wend
+	Local fv:Float = 0.0
+	Local scale:Float = 1.0
+	If i < s.Length And s[i] = 46
+		i += 1
+		While i < s.Length
+			Local ch:Int = s[i]
+			If ch < 48 Or ch > 57 Then Exit
+			fv = fv * 10.0 + (ch - 48)
+			scale *= 10.0
+			i += 1
+		Wend
+	EndIf
+	Local v:Float = iv
+	If scale > 1.0 Then v += fv / scale
+	Local esign:Int = 1
+	Local exp:Int = 0
+	If i < s.Length And (s[i] = 69 Or s[i] = 101)
+		i += 1
+		If i < s.Length And s[i] = 45 Then esign = -1; i += 1 Else If i < s.Length And s[i] = 43 Then i += 1
+		While i < s.Length
+			Local ch:Int = s[i]
+			If ch < 48 Or ch > 57 Then Exit
+			exp = exp * 10 + (ch - 48)
+			i += 1
+		Wend
+	EndIf
+	If exp > 0
+		Local p:Float = 1.0
+		For Local k:Int = 0 Until exp
+			p *= 10.0
+		Next
+		If esign < 0 Then v /= p Else v *= p
+	EndIf
+	Return v * sign
+End
+
+Function GetVec3:Float[](src:FloatStack, idx:Int)
+	Local o:Int = idx * 3
+	Return [src.Get(o), src.Get(o + 1), src.Get(o + 2)]
+End
+
+Function GetVec2:Float[](src:FloatStack, idx:Int)
+	Local o:Int = idx * 2
+	Return [src.Get(o), src.Get(o + 1)]
+End
+
+Function ComputeFaceNormal:Float[](p0:Float[], p1:Float[], p2:Float[])
+	Local ax:Float = p1[0] - p0[0]
+	Local ay:Float = p1[1] - p0[1]
+	Local az:Float = p1[2] - p0[2]
+	Local bx:Float = p2[0] - p0[0]
+	Local by:Float = p2[1] - p0[1]
+	Local bz:Float = p2[2] - p0[2]
+	Local nx:Float = ay * bz - az * by
+	Local ny:Float = az * bx - ax * bz
+	Local nz:Float = ax * by - ay * bx
+	Local ll:Float = Sqrt(nx * nx + ny * ny + nz * nz)
+	If ll <= 0.00001 Then Return [0.0, 0.0, 0.0]
+	Return [nx / ll, ny / ll, nz / ll]
+End
+
+Function PushFloat:Float[](src:Float[], value:Float)
+	Local out:Float[] = New Float[src.Length + 1]
+	For Local i:Int = 0 Until src.Length
+		out[i] = src[i]
+	Next
+	out[src.Length] = value
+	Return out
+End
+
+Function PushInt:Int[](src:Int[], value:Int)
+	Local out:Int[] = New Int[src.Length + 1]
+	For Local i:Int = 0 Until src.Length
+		out[i] = src[i]
+	Next
+	out[src.Length] = value
+	Return out
+End

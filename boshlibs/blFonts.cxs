@@ -1,0 +1,1194 @@
+
+' blFonts - native operating system fonts, rendered as a mojo2 texture
+' atlas. Extracted from SweetHome (newer and working version).
+'
+' Three ways to get a font:
+'
+'   1) New blFont("manrope")                      atlas already ready in data/fonts (.png + .txt)
+'   2) New blFont("Georgia", 30)                  system font by name and size
+'      New blFont("cerberus://data/X.ttf", 30)    or a .ttf placed in the assets
+'   3) blFont.TextImage("Georgia", 30, "ciao")    a single text as Image
+'
+' Mode 3 doesn't build the alphabet: it costs as much as the text and not as
+' the font, so it's the right one for fixed texts (menu items, list rows).
+'
+' System fonts activate by themselves on the targets for which a real native
+' implementation exists below. The app no longer has to declare anything;
+' it can still force  #NATIVEFONTSON = 1  before the Imports.
+'
+' Those without system fonts (atlas mode from file): html5 and any target
+' that's not glfw/android/ios. iOS has the native (CoreText, like macOS)
+' since 2026-09-03, tested only on the iOS Simulator.
+
+#If TARGET="android" Or TARGET="ios" Or (TARGET="glfw" And (HOST="winnt" Or HOST="macos" Or HOST="linux"))
+#NATIVEFONTSON = 1
+#EndIf
+
+
+#If NATIVEFONTSON then
+
+' The common C++ includes (<string>, <windows.h>, gdiplus) and convertBBString
+' are in native/boshlib.cpp: the blFonts-*.cpp files have no includes of their
+' own and count on finding them already emitted, so this Import must come
+' BEFORE them. It goes through blNative because importing the same .cpp
+' twice would duplicate it in the generated main.cpp.
+Import blNative
+
+
+' HOST is the system you compile on, not the target: for Android you must
+' look at TARGET, otherwise building the apk from Windows would include the
+' win file.
+
+#If TARGET="android" Then
+Import "native/blFonts-android.java"
+#EndIf
+
+' iOS: written 2026-09-03 (CoreText/CoreGraphics, same approach as
+' blFonts-mac.cpp - see PORT-MAC-LINUX.md). Tested only on the iOS Simulator.
+' CoreGraphics.framework is already in the ios template project; CoreText.framework
+' isn't, and must be added - here #LIBS+= really works (src/transcc/builders/
+' ios.cxs), so there's no need to touch the installation (see PORT-MAC-LINUX.md).
+#If TARGET="ios" Then
+Import "native/blFonts-ios.cpp"
+#LIBS+="CoreText.framework"
+#EndIf
+
+
+' TARGET="glfw", not just "TARGET<>android": HOST="macos" also applies to ios
+' (same host, different target) or html5 from a Mac, where the CoreText/
+' GDI+/X11 natives must not be imported. Found out testing blVideos on iOS.
+#If TARGET="glfw" And HOST="winnt" Then
+Import "native/blFonts-win.cpp"
+' the natives use range-for and auto: with MinGW C++11 must be turned on
+' by hand (with MSVC the option is ignored and doesn't hurt)
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#EndIf
+
+
+#If TARGET="glfw" And HOST="macos" Then
+Import "native/blFonts-mac.cpp"
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#EndIf
+
+
+#If TARGET="glfw" And HOST="linux" Then
+Import "native/blFonts-linux.cpp"
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#GLFW_GCC_CC_OPTS+="-I/usr/include/freetype2"
+#GLFW_GCC_LIB_OPTS+="-lfreetype"
+#GLFW_GCC_LIB_OPTS+="-lfontconfig"
+#EndIf
+
+
+' iOS: there's no native source yet, blFonts-ios.cpp is empty.
+
+#Endif
+
+Import mojo2
+
+Import brl.databuffer
+
+#If NATIVEFONTSON then
+
+Extern
+
+Class BBGetFont
+
+	Field dataPixel:Int[]
+	'Field table2:Image
+	Field hFont:Int
+	Field xFont:Int[]
+	Field yFont:Int[]
+	Field wFont:Int[]
+	
+
+	Method _New:Void()
+	
+End
+
+Class BBblFont
+
+	Method _New:Bool(fontname:String, dimens, peso, ital:Bool)
+	
+	Method _SelectFont:Int() = "_SelectFont"
+
+	Method _GetFontName:String()
+	Method _GetFontSize:Int()
+		
+End
+
+Function _GetFontListString:String()
+	
+Function CreateFont:BBGetFont(fontname:String, fontsize) = "_CreateFont"
+
+' Renders a single text instead of the whole alphabet: the returned image is
+' as big as the text. alignx: 0 left, 1 center, 2 right.
+Function CreateTextImage:BBGetFont(fontname:String, fontsize, txt:String, alignx:Int = 0) = "_CreateTextImage"
+
+'Function MaximizeWin:Void() = "MAXWIN"
+	
+Public
+
+#EndIf
+
+
+Global PROVAI2:Image
+Global PROVAI3:Image
+
+#If NATIVEFONTSON then
+
+Class blFont Extends BBblFont
+		
+	
+	#Else
+
+Class blFont
+	
+	#EndIf
+
+
+	Field table1:Image
+	'Field table2:Image
+	
+	Field x:Int[256]
+	Field y:Int[256]
+	Field w:Int[256]
+	Field h:Int '[256]
+	'Field offy:Int[256]
+	
+	Field xsav
+	
+	'Field x1:Int[256]
+	'Field y1:Int[256]
+	'Field w1:Int[256]
+	'Field h1:Int[256]
+	'Field offy1:Int[256]
+	
+	'Field xsav:Int
+	'Field xsav2:Int
+	
+	'Field ncars:Int
+ 	
+	Global ka:float = 1 ' 1.08 '.08
+	
+	Global ky:Float = 1 ' 1.25
+	'Const k:Int=-2 '0'-1
+ 	
+	
+	
+	Function GetFontList:String[] ()
+	
+		Return _GetFontListString().Split(";")
+	 
+	End
+
+
+	' Image of a single text, ready to draw on the Canvas.
+	'
+	' It costs as much as the text and not as the font: a font name at size 40
+	' takes a few tens of kilobytes, while the full atlas built by
+	' New blFont(...) takes over a thousand. If a text never changes (a menu
+	' item, a font name in a list) this one is better.
+	'
+	' The image is white with the alpha channel: the color is decided by whoever
+	' draws with canv.SetColor before DrawRect.
+	Function TextImage:Image(fontname:String, fontsize:Int, txt:String, alignx:Int = 0)
+
+		Local bb:BBGetFont = CreateTextImage(fontname, fontsize, txt, alignx)
+
+		If bb = Null Then Return Null
+		If bb.dataPixel.Length < 6 Then Return Null
+
+		Local ww:Int = bb.dataPixel[0]
+		Local hh:Int = bb.dataPixel[1]
+
+		If ww < 1 Or hh < 1 Then Return Null
+		If bb.dataPixel.Length < ww * hh * 4 + 2 Then Return Null
+
+		Local dd:DataBuffer = New DataBuffer(ww * hh * 4)
+
+		Local j:Int = 2
+
+		For Local i:Int = 0 Until ww * hh * 4 Step 4
+
+			' the native delivers B,G,R,A with the text black on a white
+			' background: inverting it gives a white text and the alpha channel
+			' comes out of the brightness, so the edges stay blurred
+			Local kb:Int = 255 - bb.dataPixel[j]
+			Local kg:Int = 255 - bb.dataPixel[j + 1]
+			Local kr:Int = 255 - bb.dataPixel[j + 2]
+
+			dd.PokeByte(i + 0, kr)
+			dd.PokeByte(i + 1, kg)
+			dd.PokeByte(i + 2, kb)
+			dd.PokeByte(i + 3, (kr + kg + kb) / 3)
+
+			j += 4
+
+		Next
+
+		Local im:Image = New Image(ww, hh, 0, 0)
+
+		im.WritePixels(0, 0, ww, hh, dd)
+
+		dd.Discard()
+
+		Return im
+
+	End
+	
+	' Like TextImage, but KEEPING the colors of the text: for the emoji, which
+	' are in color. TextImage inverts the pixels to get a white text to tint
+	' with SetColor, and on an emoji that inversion gives the negative.
+	'
+	' Here the color stays the original and the alpha comes from how far the
+	' pixel is from white: the native draws on a white background, so
+	' white = nothing, everything else = full.
+	'
+	' Draw it with canv.SetColor(COL_WHITE), otherwise the current color
+	' multiplies the ones in the image and dirtles them.
+	'
+	' Limit: the WHITE parts of an emoji become transparent, because on the
+	' white background they can't be told apart. With solid emoji it doesn't
+	' show; on those with white eyes or borders it does.
+	Function TextImageColor:Image(fontname:String, fontsize:Int, txt:String, alignx:Int = 0)
+
+		Local bb:BBGetFont = CreateTextImage(fontname, fontsize, txt, alignx)
+
+		If bb = Null Then Return Null
+		If bb.dataPixel.Length < 6 Then Return Null
+
+		Local ww:Int = bb.dataPixel[0]
+		Local hh:Int = bb.dataPixel[1]
+
+		If ww < 1 Or hh < 1 Then Return Null
+		If bb.dataPixel.Length < ww * hh * 4 + 2 Then Return Null
+
+		Local dd:DataBuffer = New DataBuffer(ww * hh * 4)
+
+		Local j:Int = 2
+
+		For Local i:Int = 0 Until ww * hh * 4 Step 4
+
+			' the native delivers B,G,R,A
+			Local kb:Int = bb.dataPixel[j]
+			Local kg:Int = bb.dataPixel[j + 1]
+			Local kr:Int = bb.dataPixel[j + 2]
+
+			' how far it is from white: you look at the lowest component,
+			' so a full red (255,0,0) stays opaque instead of becoming
+			' semi-transparent as the average would do
+			Local mn:Int = kr
+
+			If kg < mn Then mn = kg
+			If kb < mn Then mn = kb
+
+			Local ka:Int = 255 - mn
+
+			' The colors must be PREMULTIPLIED by the alpha: mojo2 works
+			' that way. Without it, the white background (255,255,255 with
+			' alpha 0) stays full white and the text comes out inside an
+			' opaque rectangle.
+			' TextImage doesn't have this problem only because there the
+			' background, being inverted, is already black.
+			dd.PokeByte(i + 0, kr * ka / 255)
+			dd.PokeByte(i + 1, kg * ka / 255)
+			dd.PokeByte(i + 2, kb * ka / 255)
+			dd.PokeByte(i + 3, ka)
+
+		 	j += 4
+
+		Next
+
+		Local im:Image = New Image(ww, hh, 0, 0)
+
+		im.WritePixels(0, 0, ww, hh, dd)
+
+		dd.Discard()
+
+		Return im
+
+	End
+	
+	
+	Method New(file:String)
+	
+	
+		Local a:String
+ 			
+		a = app.LoadString("cerberus://data/fonts/" + file + ".txt")
+		
+		
+		Self.table1 = Image.Load("cerberus://data/fonts/" + file + ".png", 0, 0)
+	
+		Local d:String[]=a.Split(",")
+		
+	
+		Local j:Int = 0
+		
+		h = Int(d[j])
+		
+		j = j + 1
+		
+		For Local i:Int = 32 To 255
+		
+			'Print i + "," + j
+			
+			Self.x[i] = Int(d[j])
+			Self.y[i] = Int(d[j + 1])
+			Self.w[i] = Int(d[j + 2])
+			
+			j = j + 3
+				
+		Next
+		
+	End
+	
+	
+	#If NATIVEFONTSON then
+	
+	Method New(fontname:String, fontsize)
+			
+		'_New(fontname, fontsize, peso, ital)
+		
+		'Print "1"
+		
+		_New(fontname, fontsize, 0, False)
+		
+		'Print "2"
+		
+		Local bbf:= CreateFont(fontname, fontsize)
+				
+		'Print "3"
+				
+		'Print bbf.hFont
+
+		'ADJUST FONT
+		'@@@@@@@@
+		bbf = AdjustFONT(bbf)
+				
+		Local db:= bbf.dataPixel
+				
+		'Print db.Length
+		
+		'Print db[0]
+		'Print db[1]
+		
+		Local ww = db[0]
+		Local hh = db[1]
+		
+		
+		'w = ww
+		'h = hh
+		
+		'PROVAI = New Image(ww, hh, 0, 0, 0)
+		Self.table1 = New Image(ww, hh, 0, 0) ', 0) ' Image.Filter) ' | Image.Mipmap) ', 0)
+		
+		Local l = ww * hh * 4
+		
+		Local dd:DataBuffer = New DataBuffer(l)
+		
+		Local j = 2
+		
+		'Local ka
+		
+		For Local i = 0 To l - 1 Step 4
+		
+			'If db[j] < 140 Then
+			'			If db[j] < 220 and db[j + 1] < 220 and db[j + 2] < 220 Then
+			'				ka = 255
+			'			Else
+			'				ka = 0
+			'			EndIf
+			
+			Local k1 = 255 - db[j]
+			Local k2 = 255 - db[j + 1]
+			Local k3 = 255 - db[j + 2]
+			Local k4 = db[j + 3]
+			  
+			'k1=200
+			
+			'########
+			'If k1 < 128 Then k4 = 0 Else k4 = 255
+			'If k1 < 188 and k2 < 188 and k3 < 188 Then k4 = 0 Else k4 = 255
+			
+			
+			'If k1 < KPROVA and k2 < KPROVA and k3 < KPROVA Then
+			'If k1 < KPROVA or k2 < KPROVA or k3 < KPROVA Then
+			'k4 = 0
+			'Else
+			'	k4 = 250
+			'EndIf
+			
+			k4 = (k1 + k2 + k3) / 3.0
+			
+			'****
+			'k1 = 200; k4 = 255
+			
+			dd.PokeByte(i + 0, k3)
+			dd.PokeByte(i + 1, k2)
+			dd.PokeByte(i + 2, k1)
+			dd.PokeByte(i + 3, k4)
+			
+			'			dd.PokeByte(i + 0, 255)
+			'			dd.PokeByte(i + 1, db[j + 1])
+			'			dd.PokeByte(i + 2, db[j + 2])
+			'			dd.PokeByte(i + 3, db[j + 0])
+		
+			j = j + 4
+		Next
+		
+		
+		'		PROVAI.WritePixels(0, 0, ww, hh, dd)
+		Self.table1.WritePixels(0, 0, ww, hh, dd)
+				
+		Local KK = 105 - 32
+				
+		Local kx = bbf.xFont[KK]
+		Local ky = bbf.yFont[KK]
+		
+		Local kw = bbf.wFont[KK]
+		
+		Local kh = bbf.hFont
+				
+		PROVAI2 = New Image(Self.table1, kx, ky, kw, kh, 0, 0)
+				
+		KK = 106 - 32
+				
+		kx = bbf.xFont[KK]
+		ky = bbf.yFont[KK]
+		kw = bbf.wFont[KK]
+		'h = bbf.hFont
+				
+		PROVAI3 = New Image(Self.table1, kx, ky, kw, kh, 0, 0)
+		
+		
+		Self.x = Self.x.Resize(256)
+		Self.y = Self.y.Resize(256)
+		Self.w = Self.w.Resize(256)
+		
+		'Print kh
+		
+		h = bbf.hFont
+		
+		j = 0
+		
+		For Local i:Int = 32 To 255
+		
+			Self.x[i] = bbf.xFont[j]
+			Self.y[i] = bbf.yFont[j]
+			Self.w[i] = bbf.wFont[j]
+			
+			j = j + 1
+				
+		Next
+		
+				
+				
+		'PROVAI3 = New Canvas(PROVAI2)
+				
+	
+	End
+	
+	Function AdjustFONT:BBGetFont(bb:BBGetFont)
+	
+		Local KK1 = 0 '7
+		Local KK2 = 0 '7
+		
+		#If HOST="macos" Then
+		
+			KK1 = 7
+			KK2 = 7
+		
+		#Endif
+		
+		'For Local i = 2 To 10000
+		'	bb.dataPixel[i] = 200
+		'Next
+	
+		Local ww = bb.dataPixel[0]
+		'Local hh = bb.dataPixel[1]
+		
+		Local h = bb.hFont
+		
+		'Print "->" + h
+		
+		Local nyf = 9999
+		Local nyf2 = -9999
+						
+		For Local i = 1 To 223
+		
+			Local x = bb.xFont[i]
+			Local y = bb.yFont[i]
+			Local w = bb.wFont[i]
+					
+			Local ofy = i / 32
+			ofy = ofy * h
+			
+			'STEP 1 downward
+			For Local j = y + KK1 To y + h + KK1 - KK2 - 1
+				For Local j2 = x To x + w - 1
+					Local id = (j * ww + j2) * 4 + 2
+					Local z1 = bb.dataPixel[id + 2]
+					If z1 < 128 Then
+						If j - ofy < nyf Then nyf = j - ofy
+						Exit
+					EndIf
+				Next
+			Next j
+		
+			'STEP 2 upward
+			For Local j = y + h + KK1 - KK2 - 1 To y + KK1 Step - 1
+				For Local j2 = x To x + w - 1
+					Local id = (j * ww + j2) * 4 + 2
+					Local z1 = bb.dataPixel[id + 2]
+					If z1 < 128 Then
+						If j - ofy > nyf2 Then nyf2 = j - ofy
+						Exit
+					EndIf
+				Next
+			Next
+		Next
+		
+		For Local i = 1 To 223
+			Local ofy = (i / 32) * h
+			bb.yFont[i] = nyf + ofy
+		Next
+		
+		bb.hFont = nyf2 - nyf + 1 '- 5
+		
+		Return bb
+		
+	End
+	
+	#EndIf
+	
+	
+	'Local length:Int=ff.GetTxtWidth(txt)
+	'ff.DrawText(txt,xs,y)
+
+	'	Method DrawText(txt:String, xx:Int, yy:Int, mm:Int)
+	'
+	'		Local wt:Int=0
+	'
+	'		For Local i:Int=0 To txt.Length-1
+	'
+	'			Local c:Int=txt[i]
+	'
+	'			If c<ncars Then
+	'
+	'				Select mm
+	'					Case 0
+	'						DrawImageRect(table2, xx + wt, yy, x1[c], y1[c], w1[c], h1[c], 0, 1, 1)
+	'						wt=wt+w1[c]+k
+	'					Case 128
+	'						DrawImageRect(table1, xx + wt, yy, x[c], y[c], w[c], h[c], 0, 1, 1)
+	'						wt=wt+w[c]+k+3
+	'
+	'				End
+	'
+	'			Endif
+	'
+	'		Next
+	'
+	'	End
+
+	Method DrawColorText(canv:Canvas, txt:String, xx, yy, cfor:ColorFormat, ju, sc:Float)
+	
+		Local x2:float = xx
+		
+		Local bd = ju & 64
+		Local ed = ju & 128
+		
+		Local ke = 0
+		
+		If ed Then ke = 3 * sc + 1
+		
+		For Local i:Int = 0 To txt.Length - 1
+		
+			Local c:Int=txt[i]
+						
+			If c < 256 Then
+				
+				'Local offs:float
+				Local ww:float
+				
+				'Local xdraw:float' = xt
+				'Local ydraw:float' = yt '+ ofy
+						
+				'Local ix:float '= ww * Cos(ang) * sc * ka
+				'Local iy:float '= ww * Sin(ang) * sc * ka
+						
+				'Local ox:float '= offs * Sin(ang) * sc
+				'Local oy:float '= offs * Cos(ang) * sc
+						
+				'				Select mm
+				'
+				'					Case 0
+				'
+				'						'DrawImageRect(table1, xx + xt, yy + ofy, x1[c], y1[c], w1[c], h1[c], 0, sc, sc)
+				'						'xt = xt + w1[c] * sc * ka '+ k
+				'						offs = offy1[c]
+				'						ww = w1[c]
+				'
+				'					Case 128
+				'
+				'						offs = offy[c]
+				ww = w[c]
+				'
+				'
+				'						'DrawImageRect(table1, xdraw + ox, ydraw + oy, x[c], y[c], ww, h[c], ang, sc, sc)
+				'
+				'				End
+			
+				'xdraw = xt
+				'ydraw = yt '+ ofy
+						
+				
+				'iy = ww * Sin(ang) * sc * ka
+						
+				'ox = offs * Sin(ang) * sc
+				'oy = offs * Cos(ang) * sc
+				
+				'Select mm
+				'	Case 0
+				'		canv.DrawImageRect(table2, xdraw + ox, ydraw + oy, x1[c], y1[c], ww, h1[c], ang, sc, sc)
+				'	Case 128
+				
+				Local cold:= canv.Color
+				Local calp:= canv.Alpha
+				
+				If bd Then
+					
+					Local kb = 5 * sc + 1
+				
+					canv.SetColor 0.1, 0.1, 0.1
+					
+					canv.DrawImageRect(table1, x2 + kb, yy + kb, x[c], y[c], ww, h, 0, sc, sc)
+					
+				EndIf
+				
+				If ed Then
+										
+					canv.SetColor 0.1, 0.1, 0.1
+					
+					For Local xe = -ke To ke
+						For Local ye = -ke To ke
+							canv.DrawImageRect(table1, x2 + xe, yy + ye, x[c], y[c], ww, h, 0, sc, sc)
+						Next
+					Next
+				
+				EndIf
+				
+				Local c1 = cfor.GetColorFromCh(c)
+				
+				If c1 <> - 1 Then
+					canv.SetColor(c1)
+				Else
+					canv.SetColor(cold[0], cold[1], cold[2], calp)
+				EndIf
+				
+				
+				'canv.SetColor( $ff303030)
+				'canv.SetAlpha 1
+				
+				canv.DrawImageRect(table1, x2, yy, x[c], y[c], ww, h, 0, sc, sc)
+				
+				
+				
+				'EndIf
+				
+				'End
+				
+				x2 = x2 + (ww + ke) * sc * ka
+				'yt = yt - iy
+				
+			Endif
+			
+		Next
+		
+		xsav = x2
+		
+	End Method
+	
+	
+	
+	
+	
+	Method DrawText(canv:Canvas, txt:String, xx, yy, c1, ju, sc:Float)
+	
+		Local x2:float = xx
+		
+		Local bd = ju & 64
+		Local ed = ju & 128
+		
+		Local ke = 0
+		
+		If ed Then ke = 3 * sc + 1
+		
+		For Local i:Int = 0 To txt.Length - 1
+		
+			Local c:Int=txt[i]
+						
+			If c>0 And c < 256 Then
+				
+				'Local offs:float
+				Local ww:float
+				
+				'Local xdraw:float' = xt
+				'Local ydraw:float' = yt '+ ofy
+						
+				'Local ix:float '= ww * Cos(ang) * sc * ka
+				'Local iy:float '= ww * Sin(ang) * sc * ka
+						
+				'Local ox:float '= offs * Sin(ang) * sc
+				'Local oy:float '= offs * Cos(ang) * sc
+						
+				'				Select mm
+				'
+				'					Case 0
+				'
+				'						'DrawImageRect(table1, xx + xt, yy + ofy, x1[c], y1[c], w1[c], h1[c], 0, sc, sc)
+				'						'xt = xt + w1[c] * sc * ka '+ k
+				'						offs = offy1[c]
+				'						ww = w1[c]
+				'
+				'					Case 128
+				'
+				'						offs = offy[c]
+				ww = w[c]
+				'
+				'
+				'						'DrawImageRect(table1, xdraw + ox, ydraw + oy, x[c], y[c], ww, h[c], ang, sc, sc)
+				'
+				'				End
+			
+				'xdraw = xt
+				'ydraw = yt '+ ofy
+						
+				
+				'iy = ww * Sin(ang) * sc * ka
+						
+				'ox = offs * Sin(ang) * sc
+				'oy = offs * Cos(ang) * sc
+				
+				'Select mm
+				'	Case 0
+				'		canv.DrawImageRect(table2, xdraw + ox, ydraw + oy, x1[c], y1[c], ww, h1[c], ang, sc, sc)
+				'	Case 128
+				
+				Local cold:= canv.Color
+				Local calp:= canv.Alpha
+				
+				If bd Then
+					
+					Local kb = 5 * sc + 1
+				
+					canv.SetColor 0.1, 0.1, 0.1
+					
+					canv.DrawImageRect(table1, x2 + kb, yy + kb, x[c], y[c], ww, h, 0, sc, sc)
+					
+				EndIf
+				
+				If ed Then
+										
+					canv.SetColor 0.1, 0.1, 0.1
+					
+					For Local xe = -ke To ke
+						For Local ye = -ke To ke
+							canv.DrawImageRect(table1, x2 + xe, yy + ye, x[c], y[c], ww, h, 0, sc, sc)
+						Next
+					Next
+				
+				EndIf
+				
+				If c1 <> - 1 Then
+					canv.SetColor(c1)
+				Else
+					canv.SetColor(cold[0], cold[1], cold[2], calp)
+				EndIf
+				
+				'canv.SetColor( $ff303030)
+				'canv.SetAlpha 1
+				
+				canv.DrawImageRect(table1, x2, yy, x[c], y[c], ww, h, 0, sc, sc)
+				
+				
+				
+				'EndIf
+				
+				'End
+				
+				x2 = x2 + (ww + ke) * sc * ka
+				'yt = yt - iy
+				
+			Endif
+			
+		Next
+		
+		xsav = x2
+		
+	End Method
+	
+	Method GetTextWidth:float(txt:String, ju, sc:float = 1)
+		
+		'Local bd = ju & 64
+		Local ed = ju & 128
+		
+		Local ke = 0
+		
+		If ed Then ke = 3 * sc + 1
+		
+		Local wt:float = 0
+		
+		For Local i:Int=0 To txt.Length-1
+			
+			Local c:Int=txt[i]
+			
+			If c < 256 Then
+				
+				'Print c
+				
+				Local iw:Float = (w[c] + ke) * sc * ka
+			
+				wt = wt + iw
+				
+				'				Select i
+				'					Case txt.Length - 1
+				'						wt = wt + w[c] * sc * ka
+				'					Default
+				'						wt = wt + w[c] * sc * ka
+				'				End
+				
+			Endif
+					
+		Next
+	
+		'Print wt
+		
+		Return wt
+		
+	End Method
+	
+	Method GetTextHeight:float(txt:String, ju, sc:float = 1)
+		
+		Return h
+		
+	End
+	
+
+
+	
+	#If NATIVEFONTSON then
+	
+	' Opens the native system font dialog (Windows / macOS / Linux).
+	' Returns 1 if the user confirmed, 0 if they cancelled.
+	' The chosen name and size are read with SelectedName() and SelectedSize():
+	' the module doesn't write into application variables.
+	Method SelectFont:Int()
+		
+		Return _SelectFont()
+		
+	End
+	
+	Method SelectedName:String()
+		
+		Return _GetFontName()
+		
+	End
+	
+	Method SelectedSize:Int()
+		
+		Return _GetFontSize()
+		
+	End
+	
+	#EndIf
+
+End
+
+
+Class ColorFormat
+	
+	Field chrcl:Int[]
+	Field colors:Int[]
+	
+	Method New()
+		
+	End
+	
+	Method AddChrCol(ch, co)
+		
+		Local l = chrcl.Length
+		
+		chrcl = chrcl.Resize(l + 1)
+		colors = colors.Resize(l + 1)
+		
+		chrcl[l] = ch
+		colors[l] = co
+		
+		
+	End
+	
+	Method GetColorFromCh(c)
+	
+		Local l = chrcl.Length
+		
+		For Local i = 0 To l - 1
+			
+			If chrcl[i] = c Then Return colors[i]
+		
+		Next
+	
+		Return -1
+		
+	End
+	
+End
+
+Function DrawString(canv:Canvas, ff:blFont, txt:String, x, y, c1, ju, s:float = 1)
+		
+	Local g1:Int = ju & 3
+	Local g2:Int = ju & 12
+	'Local g3:Int = ju & 128
+
+	'If txt.EndsWith("_") Then inson=True; txt=LeftString(txt,txt.Length-1)
+	
+	'Local xs:Int=x
+	'Local ys:Int=y
+	Local lengtht:Int = ff.GetTextWidth(txt, ju, s)
+	Local heightt:Int = ff.h * s 'ff.GetTxtHeight(txt, s, g3)
+	'Local heightt:Int = ff.h * s * blFont.ka * blFont.ky
+		
+	'If inson Then txt=txt+"_"
+	
+	'########
+	'	If idcurrobj = idobjedit and counter & 32 Then txt = txt + "_"
+	
+	'JsTopLeft=0, JsTopCenter=1, JsTopRight=2, JsMiddleLeft=4, JsMiddleCenter=5, JsMiddleRight=6, JsBottomLeft=8, JsBottomCenter=9, JsBottomRight=10
+		
+	Local ox:float
+	Local oy:float
+	
+	Select g1
+		Case 1
+			ox = lengtht / 2.0
+			'xs = x - ox * Cos(ang)' * s
+			'ys = y + ox * Sin(ang)' * s
+		Case 2
+			ox = lengtht
+			'xs = x - ox * Cos(ang)' * s
+			'ys = y + ox * Sin(ang)' * s
+	End
+
+	x = x - ox
+	
+	'g2 = 0
+	
+	Select g2
+		Case 4
+			oy = heightt / 2.0
+			'xs = xs - ox * Sin(ang)' * s
+			'ys = ys - ox * Cos(ang)' * s
+			'ys = y-heightt/2
+		Case 8
+			oy = heightt
+			'xs = xs - ox * Sin(ang)' * s
+			'ys = ys - ox * Cos(ang)' * s
+	End
+	
+	y = y - oy
+	
+	ff.DrawText(canv, txt, x, y, c1, ju, s)
+	
+End
+	
+Function DrawStringM(canv:Canvas, ff:blFont, txt:String, x, y, c1, ju, w, s:float = 1)
+
+	Local g1:Int = ju & 3
+	Local g2:Int = ju & 12
+	'Local g3:Int = ju & 128
+	
+
+	'Local parole:String[] = txt.Split(" ")
+		
+	'Local l:Int = parole.Length
+	
+	txt = txt + " "
+	'txt = txt + " " ' String.FromChar(2)
+	
+	'Local l:Int = txt.Length
+	
+	'	Local cc:Int[l]
+	'	Local bk:Int[l]
+	'
+	'	Local idbk
+	'
+	'	For Local i = 0 To l - 1
+	'
+	'		Local d = txt[i]
+	'
+	'		cc[i] = d
+	'
+	'		If d = 32 Then bk[idbk] = i; idbk = idbk + 1
+	'
+	'	Next
+	
+	Local words:String[] = txt.Split(" ")
+	
+	Local l:Int = words.Length
+	
+	Local txtlines:String[] = New String[l + 4]
+	'Local txtlines2:String[] = New String[l + 4]
+	
+	Local nl ', nl2
+	
+	'Local lenwords:Int[] = New Int[l + 10]
+		
+	'Local wordok:Int[] = New Int[l + 10]
+	
+	'For Local i:Int=0 To l-1
+	'txtlines[i]=parole[i]
+	'	lenwords[i] = ff.GetTxtWidth(parole[i], s, 0)
+	'Next
+		
+	'Local n:Int=0
+	'Local p:Int=0
+	'Local lu:Int=0
+	'Local p2, p3, e
+	
+	Local str1:String
+	Local str2:String
+	'Local strold:String
+	
+	
+	'Local lu, id, idp
+	
+	'idp = 0
+	
+	
+	For Local i:String = EachIn words
+	
+		str2 = str1 + i
+		
+		Local lw = ff.GetTextWidth(str2.Trim, ju, s)
+	
+		If lw > w Then
+			
+			txtlines[nl] = str1.Trim
+		
+			nl = nl + 1
+					
+			str1 = ""
+			
+		EndIf
+		
+		str1 = str1 + i + " "
+		
+	Next
+	
+	If str1.Trim <> "" Then txtlines[nl] = str1; nl = nl + 1
+	
+	
+	
+	'Local heightt:float = 0 'ff.h * s '* n * blFont.ka
+	Local heightt:float = 0 '-ff.h * s * 0.2 '* n * blFont.ka
+		
+	For Local i = 0 To nl - 1
+		
+		Local addk:Float = 1
+		If i < nl - 1 Then addk = blFont.ky
+		Local addy:Float = ff.h * s * blFont.ka * addk
+		
+		If txtlines[i].Trim <> "" Then heightt = heightt + addy
+	Next
+	
+	Local oy:float
+	
+	Select g2
+		Case 4
+			oy = heightt / 2.0
+			'xs = xs - ox * Sin(ang)' * s
+			'ys = ys - ox * Cos(ang)' * s
+			'ys = y-heightt/2
+		Case 8
+			oy = heightt
+			'xs = xs - ox * Sin(ang)' * s
+			'ys = ys - ox * Cos(ang)' * s
+	End
+	
+	y = y - oy
+	
+	'n = n - 1
+	
+	
+	For Local i:Int = 0 To nl - 1
+		
+		txt = txtlines[i].Trim
+		
+		If txt <> "" Then
+		
+			Local lengtht:Int = ff.GetTextWidth(txt, ju, s)
+		
+	
+			Local ox:float
+		
+	
+			Select g1
+				Case 1
+					ox = lengtht / 2.0
+					'xs = x - ox * Cos(ang)' * s
+					'ys = y + ox * Sin(ang)' * s
+				Case 2
+					ox = lengtht
+					'xs = x - ox * Cos(ang)' * s
+					'ys = y + ox * Sin(ang)' * s
+			End
+
+			'x = x - ox
+		
+			'DrawString(ff, txt, x, y, ju, s)
+			ff.DrawText(canv, txt, x - ox, y, c1, ju, s)
+		
+			'y2 = y2 + iy
+			'x3 = x3 + ix3
+			'y3 = y3 + iy3
+			
+			Local addk:Float = 1
+			If i < nl - 1 Then addk = blFont.ky
+			Local addy:Float = ff.h * s * blFont.ka * addk
+			
+			y = y + addy
+		
+		EndIf
+		
+	Next
+	
+End
+
+
+Function CreateFontFromFile:blFont(file:String)
+		
+	Local O:= New blFont(file)
+		
+	Return O
+	
+End Function
+	
+Function CreateFontFromSystem:blFont(fontname:String, fontsize)
+		
+	Local O:= New blFont(fontname, fontsize)
+		
+	Return O
+	
+End Function
+
+
+'Enumerate JsTopLeft = 0, JsTopCenter = 1, JsTopRight = 2, JsMiddleLeft = 4, JsMiddleCenter = 5, JsMiddleRight = 6, JsBottomLeft = 8, JsBottomCenter = 9, JsBottomRight = 10
+
+Enumerate TxEdge = 128, TxBorder = 64, TxMultiLine = 32
+
+Enumerate TxOrRectEvidYellow = $1000000
+Enumerate TxOrRectEvidAzure = $2000000
+Enumerate TxOrRectEvidOrange = $3000000
+

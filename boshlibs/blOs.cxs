@@ -1,0 +1,258 @@
+
+' blOs - il modulo "os" per i target dove non esiste.
+'
+' brl/os e' dichiarato solo per glfw e stdcpp (#Error su tutto il resto), ma la
+' libreria lo usa in una sessantina di punti come os.FileType, os.LoadString,
+' os.FILETYPE_FILE... Qui c'e' una classe che si chiama esattamente "os" e
+' offre gli stessi nomi con le stesse firme, quindi NESSUN call site cambia:
+' cambia solo quale dei due si importa.
+'
+'     #If TARGET="glfw" Or TARGET="stdcpp"
+'     Import os                 ' quello vero di Cerberus
+'     #Else
+'     Import boshlibs.blOs      ' questo
+'     #EndIf
+'
+' Sui target desktop non viene quindi toccato nulla: continua a girare il
+' modulo originale, bit per bit.
+'
+' In piu', su Android, i path che cominciano per content:// (quelli restituiti
+' dal file picker del sistema) vengono serviti passando dal ContentResolver,
+' cosi' un documento scelto dall'utente si comporta come un file normale.
+
+Import brl.filesystem
+Import brl.filepath
+
+Import boshlibs.blRequesters
+
+
+#If TARGET="android"
+
+Import "native/blOs-android.java"
+
+Extern
+
+Class BBblOs
+
+	Function _AppPath:String()
+	Function _LoadString:String(path:String)
+	Function _SaveString:Int(text:String, path:String)
+
+End
+
+Public
+
+#EndIf
+
+
+Class os
+
+	' Stessi valori del modulo originale e di brl.filesystem.
+	Const FILETYPE_NONE:Int = 0
+	Const FILETYPE_FILE:Int = 1
+	Const FILETYPE_DIR:Int = 2
+
+
+	'#########################################################################
+	' INTERROGAZIONE
+	'#########################################################################
+
+	Function FileType:Int(path:String)
+
+		If blRequest.IsUri(path) Then
+
+			If blRequest.UriExists(path) Then Return FILETYPE_FILE
+
+			Return FILETYPE_NONE
+
+		EndIf
+
+		Return filesystem.FileType(path)
+
+	End Function
+
+
+	Function FileSize:Int(path:String)
+
+		If blRequest.IsUri(path) Then Return blRequest.UriSize(path)
+
+		Return filesystem.FileSize(path)
+
+	End Function
+
+
+	Function FileTime:Int(path:String)
+
+		If blRequest.IsUri(path) Then Return blRequest.UriTime(path)
+
+		Return filesystem.FileTime(path)
+
+	End Function
+
+
+	Function RealPath:String(path:String)
+
+		' Un URI non ha una forma canonica: va lasciato com'e'.
+		If blRequest.IsUri(path) Then Return path
+
+		Return filesystem.RealPath(path)
+
+	End Function
+
+
+	'#########################################################################
+	' LETTURA / SCRITTURA
+	'#########################################################################
+
+	Function LoadString:String(path:String)
+
+		If blRequest.IsUri(path) Then Return blRequest.UriReadText(path)
+
+		#If TARGET="android"
+		Return BBblOs._LoadString(path)
+		#Else
+		Return ""
+		#EndIf
+
+	End Function
+
+
+	' 0 se il salvataggio e' riuscito, come sul desktop.
+	Function SaveString:Int(text:String, path:String)
+
+		If blRequest.IsUri(path) Then
+
+			If blRequest.UriWriteText(path, text) Then Return 0
+
+			Return -1
+
+		EndIf
+
+		#If TARGET="android"
+		Return BBblOs._SaveString(text, path)
+		#Else
+		Return -1
+		#EndIf
+
+	End Function
+
+
+	'#########################################################################
+	' DIRECTORY
+	'#########################################################################
+
+	Function LoadDir:String[] (path:String)
+
+		Return filesystem.LoadDir(path)
+
+	End Function
+
+
+	Function LoadDir:String[] (path:String, recursive:Bool, hidden:Bool = False)
+
+		Return filesystem.LoadDir(path, recursive, hidden)
+
+	End Function
+
+
+	Function CreateDir:Int(path:String)
+
+		If filesystem.CreateDir(path) Then Return 1
+
+		Return 0
+
+	End Function
+
+
+	Function DeleteDir:Int(path:String)
+
+		If filesystem.DeleteDir(path) Then Return 1
+
+		Return 0
+
+	End Function
+
+
+	Function DeleteFile:Int(path:String)
+
+		If filesystem.DeleteFile(path) Then Return 1
+
+		Return 0
+
+	End Function
+
+
+	Function CopyFile:Int(src:String, dst:String)
+
+		If filesystem.CopyFile(src, dst) Then Return 1
+
+		Return 0
+
+	End Function
+
+
+	'#########################################################################
+	' VARIE
+	'#########################################################################
+
+	Function AppPath:String()
+
+		#If TARGET="android"
+		Return BBblOs._AppPath()
+		#Else
+		Return ""
+		#EndIf
+
+	End Function
+
+
+	Function HostOS:String()
+
+		#If TARGET="android"
+		Return "android"
+		#Else
+		Return ""
+		#EndIf
+
+	End Function
+
+
+	'#########################################################################
+	' PATH  (identici a brl.filepath, che e' gia' puro Cerberus)
+	'#########################################################################
+
+	Function StripDir:String(path:String)
+
+		Return filepath.StripDir(path)
+
+	End Function
+
+
+	Function ExtractDir:String(path:String)
+
+		Return filepath.ExtractDir(path)
+
+	End Function
+
+
+	Function StripExt:String(path:String)
+
+		Return filepath.StripExt(path)
+
+	End Function
+
+
+	Function ExtractExt:String(path:String)
+
+		Return filepath.ExtractExt(path)
+
+	End Function
+
+
+	Function StripAll:String(path:String)
+
+		Return filepath.StripAll(path)
+
+	End Function
+
+End Class

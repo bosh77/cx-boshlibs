@@ -1,0 +1,443 @@
+' blHooks - bridge between boshlibs desktop modules and the application.
+' A module cannot import the project that uses it: the app implements
+' IBlEvents and registers with SetBlEvents(). The functions below keep
+' the original names, so the desktop modules don't need rewriting.
+
+Import mojo2
+Import blTheme
+Import blFonts
+Import blGraphics
+Import blTextboxes
+
+
+Import vortex3
+Import blObjs3D
+' --- module data, populated by the application ---------------------
+' (invio, countdclick, dclick and readkeys are in blFuncs)
+
+Global CXpath:String
+Global KPROVA = 120
+Global consolewin:blTextbox
+Global findstr:Int
+Global findstring:String
+Global font1:blFont
+Global fontpi:blFont
+Global idmenustart
+Global idsoluzfile
+Global ischecking
+Global logo:Image
+Global mainscr:blGraphic
+Global menu:Image
+Global menustart:Image
+Global menuton
+Global menutonx
+Global menutony
+Global namesolution:String
+Global nochangefocus
+Global notexton
+Global replstr:Int
+Global replstring:String
+Global soluzfilename:String[1000]
+Global idelang:Int = 0    ' was = LANG_EN, which is 0
+
+' --- MSXCompiler data (Z80 compiler) ---
+Global MAXMEM = 150000
+Global labelname:String[MAXMEM]
+Global lines:String[200000]
+Global themesel:Int
+Global keywordasm:String[] =["nop", "ld", "inc", "dec", "rlca", "ex", "add", "rrca", "djnz", "rla", "jr", "jr z", "rra", "daa", "cpl", "scf", "ccf",
+	"halt", "adc", "sub", "sbc", "and", "xor", "or", "cp", "ret", "pop", "jp", "call", "push", "rst", "out", "exx", "in", "di", "ei", "neg", "retn",
+	"im", "reti", "rrd", "rld", "ldi", "cpi", "ini", "outi", "ldd", "cpd", "ind", "outd", "ldir", "cpir", "inir", "otir", "lddr", "cpdr", "indr", "otdr",
+	"rlc", "rrc", "rl", "rr", "sla", "sra", "bit", "res", "set", "srl", "sll",
+	"equ", "org", "defb", "defw", "defs",
+	"include", ".db", "db", ".dw", "dw", "IF", "ELSE", "ENDIF", "addbin"]
+Global errorswin:blTextbox
+Global islinux:Bool
+Global ismac:Bool
+
+
+' --- CxCAD data (3D modeling) ---
+Global MCubo:Model
+Global menubutt
+
+
+' BASIC dialect for syntax highlighting: 2 = CerbIDE (default), 1 = MSXCompiler.
+Global blHLBasicVariant:Int = 2
+
+' Vocabulary of dialect 1 (MSXCompiler). The CerbIDE keywords are in
+' blTextboxes (keywordscxs), the MSX ones are in the app - which also is
+' the only one that knows which instructions it can compile - and they arrive
+' here: the module cannot import the application. If they stay empty, syntax
+' highlighting falls back to the CerbIDE vocabulary, which finds almost
+' nothing on a .msxproj.
+Global blHLKeywordsBasic:String[]
+Global blHLKeywordsPreProc:String[]
+
+
+' Splits the mojo2 primitive batch with a Flush after each tab bar element
+' and window frame. Needed when vortex3 (3D) and mojo2 (GUI) coexist in the
+' same application: without it, the first 2D Flush after a 3D render causes
+' a memory violation. For GUI-only projects, leave it at 0.
+Global blForceCanvasFlush:Int = 0
+
+
+' --- callbacks to the application --------------------------------------
+
+Interface IBlEvents
+
+	Method OnAddHistory:Void(filen:string)
+	Method OnAdjustPath:String(path:String)
+	Method OnBuildAndCheck:Void()
+	Method OnCheckerErrorsStart:Void()
+	Method OnClearALL:Void()
+	Method OnCloseSolution:Void()
+	Method OnCreateHistory:Void()
+	Method OnDBG_KeypressLag_Event:Void(hyp:String, location:String, msg:String, dataJson:String)
+	Method OnIDE_GetParserCycleId:Int()
+	Method OnIDE_HasReachabilityInfo:Int(mainFilePath:String)
+	Method OnIDE_IsFixedModulePath:Int(filePath:String)
+	Method OnIDE_IsSymFileReachableForMain:Int(mainFilePath:String, symFilePath:String)
+	Method OnIdeUiFileNameColor:Int()
+	Method OnIdeUiSidePanelColor:Int(typewin:Int)
+	Method OnLANG_T:String(k:String)
+	Method OnLostFocus:Void()
+	Method OnManageSolution:Void()
+	Method OnNewProject:Void()
+	Method OnNewSolution:Void()
+	Method OnRemoveDocumentsNotUsed:Void()
+	Method OnRunProg:Void()
+
+	' Access to guiBasic2 objects of the application: the module must not
+	' name the Gui type, which belongs to guiBasic2 and not to boshlibs.
+	Method GotoLineVisible:Int()
+	Method SetGotoLineVisible:Void(v:Int)
+	Method FindReplVisible:Int()
+	Method SetFindReplVisible:Void(v:Int)
+	Method FindText:String()
+	Method ReplText:String()
+	Method OnDisassemblerZ80:String(filenm:String)
+	Method OnGetTipoVariable:Int(tipovar:String)
+	Method OnIsALabelAsm:Bool(str:String)
+	Method OnRunApp:Void()
+	Method OnRebuildEditableModel3D:Void(obj:Model3D)
+	Method OnDiscardModel3DWire:Void(obj:Model3D)
+	Method NoActiveTextbox:Int()
+	Method SetFindText:Void(t:String)
+	Method FocusFindBox:Void()
+	Method OnCreateDefaultLayout:Void()
+	Method OnCreateDefaultSheet:Void()
+
+End
+
+
+Global blEvents:IBlEvents
+
+Function SetBlEvents:Void( handler:IBlEvents )
+	blEvents = handler
+End
+
+
+' --- bridge functions, same names as before -------------------------------
+
+Function AddHistory(filen:string)
+	If blEvents <> Null Then blEvents.OnAddHistory(filen)
+End
+
+Function AdjustPath:String(path:String)
+	If blEvents <> Null Then Return blEvents.OnAdjustPath(path)
+	Return ""
+End
+
+Function BuildAndCheck()
+	If blEvents <> Null Then blEvents.OnBuildAndCheck()
+End
+
+Function CheckerErrorsStart()
+	If blEvents <> Null Then blEvents.OnCheckerErrorsStart()
+End
+
+Function ClearALL()
+	If blEvents <> Null Then blEvents.OnClearALL()
+End
+
+Function CloseSolution()
+	If blEvents <> Null Then blEvents.OnCloseSolution()
+End
+
+Function CreateHistory()
+	If blEvents <> Null Then blEvents.OnCreateHistory()
+End
+
+Function DBG_KeypressLag_Event:Void(hyp:String, location:String, msg:String, dataJson:String)
+	If blEvents <> Null Then blEvents.OnDBG_KeypressLag_Event(hyp, location, msg, dataJson)
+End
+
+Function IDE_GetParserCycleId:Int()
+	If blEvents <> Null Then Return blEvents.OnIDE_GetParserCycleId()
+	Return 0
+End
+
+Function IDE_HasReachabilityInfo:Int(mainFilePath:String)
+	If blEvents <> Null Then Return blEvents.OnIDE_HasReachabilityInfo(mainFilePath)
+	Return 0
+End
+
+Function IDE_IsFixedModulePath:Int(filePath:String)
+	If blEvents <> Null Then Return blEvents.OnIDE_IsFixedModulePath(filePath)
+	Return 0
+End
+
+Function IDE_IsSymFileReachableForMain:Int(mainFilePath:String, symFilePath:String)
+	If blEvents <> Null Then Return blEvents.OnIDE_IsSymFileReachableForMain(mainFilePath, symFilePath)
+	Return 0
+End
+
+Function IdeUiFileNameColor:Int()
+	If blEvents <> Null Then Return blEvents.OnIdeUiFileNameColor()
+	Return 0
+End
+
+Function IdeUiSidePanelColor:Int(typewin:Int)
+	If blEvents <> Null Then Return blEvents.OnIdeUiSidePanelColor(typewin)
+	Return 0
+End
+
+Function LANG_T:String(k:String)
+	If blEvents <> Null Then Return blEvents.OnLANG_T(k)
+	Return ""
+End
+
+Function LostFocus()
+	If blEvents <> Null Then blEvents.OnLostFocus()
+End
+
+Function ManageSolution()
+	If blEvents <> Null Then blEvents.OnManageSolution()
+End
+
+Function NewProject()
+	If blEvents <> Null Then blEvents.OnNewProject()
+End
+
+Function NewSolution()
+	If blEvents <> Null Then blEvents.OnNewSolution()
+End
+
+Function RemoveDocumentsNotUsed()
+	If blEvents <> Null Then blEvents.OnRemoveDocumentsNotUsed()
+End
+
+Function RunProg()
+	If blEvents <> Null Then blEvents.OnRunProg()
+End
+
+
+' CxCAD-specific callbacks.
+Function RebuildEditableModel3D(obj:Model3D)
+	If blEvents <> Null Then blEvents.OnRebuildEditableModel3D(obj)
+End
+
+Function DiscardModel3DWire:Void(obj:Model3D)
+	If blEvents <> Null Then blEvents.OnDiscardModel3DWire(obj)
+End
+
+
+' MSXCompiler-specific callbacks (empty stubs in other projects).
+Function DisassemblerZ80:String(filenm:String)
+	If blEvents <> Null Then Return blEvents.OnDisassemblerZ80(filenm)
+	Return ""
+End
+
+Function GetTipoVariable(tipovar:String)
+	If blEvents <> Null Then Return blEvents.OnGetTipoVariable(tipovar)
+	Return 0
+End
+
+Function IsALabelAsm:Bool(str:String)
+	If blEvents <> Null Then Return blEvents.OnIsALabelAsm(str)
+	Return False
+End
+
+Function RunApp()
+	If blEvents <> Null Then blEvents.OnRunApp()
+End
+
+
+' 1 if no guiBasic2 textbox has focus (the module doesn't know Gui).
+Function NoActiveTextbox:Int()
+	If blEvents <> Null Then Return blEvents.NoActiveTextbox()
+	Return 1
+End
+
+
+' --- pure helpers, moved here from the project -----------------------------
+
+Function IsADigit:Bool(c:Int)
+
+	If c >= 48 And c <= 57 Then Return True
+
+	Return False
+
+End
+
+Function IsADigitAsm:Bool(c:Int)
+
+	If c = 36 Or c >= 65 And c <= 90 Or c >= 97 And c <= 122 Or c >= 48 And c <= 57 Then Return True
+
+	Return False
+
+End
+
+Function IsALabelChr:Bool(c:Int)
+
+	If c = 36 Or c = 95 Or c >= 65 And c <= 90 Or c >= 97 And c <= 122 Or c >= 48 And c <= 57 Then Return True
+
+	Return False
+
+End
+
+Function IsALetter:Bool(c:Int)
+
+	If c = 95 Or c >= 65 And c <= 90 Or c >= 97 And c <= 122 Then Return True
+
+	Return False
+
+End
+
+' Adapter: implements IBlEvents with empty methods.
+' Your app writes `Class MyEvents Extends BlEventsAdapter` and redefines
+' only the methods it needs, instead of having to write them all.
+Class BlEventsAdapter Implements IBlEvents
+
+	Method OnAddHistory:Void(filen:string)
+	End
+
+	Method OnAdjustPath:String(path:String)
+		Return ""
+	End
+
+	Method OnBuildAndCheck:Void()
+	End
+
+	Method OnCheckerErrorsStart:Void()
+	End
+
+	Method OnClearALL:Void()
+	End
+
+	Method OnCloseSolution:Void()
+	End
+
+	Method OnCreateHistory:Void()
+	End
+
+	Method OnDBG_KeypressLag_Event:Void(hyp:String, location:String, msg:String, dataJson:String)
+	End
+
+	Method OnIDE_GetParserCycleId:Int()
+		Return 0
+	End
+
+	Method OnIDE_HasReachabilityInfo:Int(mainFilePath:String)
+		Return 0
+	End
+
+	Method OnIDE_IsFixedModulePath:Int(filePath:String)
+		Return 0
+	End
+
+	Method OnIDE_IsSymFileReachableForMain:Int(mainFilePath:String, symFilePath:String)
+		Return 0
+	End
+
+	Method OnIdeUiFileNameColor:Int()
+		' white: with 0 the file names on the tabs would be black on a dark background
+		Return $FFFFFF
+	End
+
+	Method OnIdeUiSidePanelColor:Int(typewin:Int)
+		Return 0
+	End
+
+	Method OnLANG_T:String(k:String)
+		Return ""
+	End
+
+	Method OnLostFocus:Void()
+	End
+
+	Method OnManageSolution:Void()
+	End
+
+	Method OnNewProject:Void()
+	End
+
+	Method OnNewSolution:Void()
+	End
+
+	Method OnRemoveDocumentsNotUsed:Void()
+	End
+
+	Method OnRunProg:Void()
+	End
+
+	Method GotoLineVisible:Int()
+		Return 0
+	End
+
+	Method SetGotoLineVisible:Void(v:Int)
+	End
+
+	Method FindReplVisible:Int()
+		Return 0
+	End
+
+	Method SetFindReplVisible:Void(v:Int)
+	End
+
+	Method FindText:String()
+		Return ""
+	End
+
+	Method ReplText:String()
+		Return ""
+	End
+
+	Method OnDisassemblerZ80:String(filenm:String)
+		Return ""
+	End
+
+	Method OnGetTipoVariable:Int(tipovar:String)
+		Return 0
+	End
+
+	Method OnIsALabelAsm:Bool(str:String)
+		Return False
+	End
+
+	Method OnRunApp:Void()
+	End
+
+	Method OnRebuildEditableModel3D:Void(obj:Model3D)
+	End
+
+	Method OnDiscardModel3DWire:Void(obj:Model3D)
+	End
+
+	Method NoActiveTextbox:Int()
+		Return 0
+	End
+
+	Method SetFindText:Void(t:String)
+	End
+
+	Method FocusFindBox:Void()
+	End
+
+	Method OnCreateDefaultLayout:Void()
+	End
+
+	Method OnCreateDefaultSheet:Void()
+	End
+
+End

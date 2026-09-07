@@ -1,0 +1,1671 @@
+Import blTheme
+Import blHooks
+
+
+
+Import blDocBase
+Import blFuncs
+
+Import brl.filestream
+Import brl.filesystem
+Import brl.filepath
+Import brl.requesters
+
+Import blFonts
+Import blGraphics
+
+Global focusboxok           ' usato da MSXCompiler
+
+Global xfont1name:String
+Global xfont1:blFont
+Global xkscale:Int
+Global ykscale:Int
+Global hcaret:Int
+Global kscalefont:Float = 16
+
+Global actsheet:blSheet
+Global focussheet:blSheet
+	
+Global boxmove:blGraphic
+Global boxmovex
+Global boxmovey
+Global boxmovew
+Global boxtextx
+Global boxmoveon:blGraphic
+Global boxmovelr '0-LEFT 1-RIGHT
+
+Global focusboxold:blGraphic
+
+Global cursorvis
+Global cursorvis2
+
+' Percorso mostrato nella barra del foglio: un solo "/" (niente "//" da dir+file).
+' Se inizia con "//" (UNC), preserva quelle due barre iniziali.
+Function SheetDisplayPath:String(p:String)
+
+	p = AdjustPath(p)
+	
+	If p = "" Then Return p
+	
+	If p.StartsWith("//")
+	
+		Local body:String = MidString(p, 3, p.Length - 2)
+		
+		While body.Contains("//")
+		
+			body = body.Replace("//", "/")
+		
+		Wend
+		
+		Return "//" + body
+	
+	EndIf
+	
+	While p.Contains("//")
+	
+		p = p.Replace("//", "/")
+	
+	Wend
+	
+	Return p
+
+End
+
+Function SheetPathsEqual:Int(a:String, b:String)
+
+	Local ka:String = SheetDisplayPath(a)
+	Local kb:String = SheetDisplayPath(b)
+	
+	#If HOST="winnt"
+	
+	Return ka.ToLower() = kb.ToLower()
+	
+	#Else
+	
+	Return ka = kb
+	
+	#EndIf
+
+End
+
+Class blSheet Extends blGraphic
+
+	Global allsheets:= New List<blSheet>
+
+	
+	Global docum:= New List<blDoc>   ' testi e disegni insieme
+	Global IDDOC:Int
+		
+	Global mainbox:blGraphic
+	
+	Field childsboxes:= New List<blGraphic>
+	
+	Field focusbox:blGraphic
+	
+	
+	
+	'Field isfocus
+	
+	
+	Method New(x1:Float, y1:Float, x2:Float, y2:Float)
+	
+		Self.typeobj = 1
+		
+		Self.xo1 = x1
+		Self.yo1 = y1
+		Self.xo2 = x2
+		Self.yo2 = y2
+	
+				
+		'focussheet = Self
+		
+		'allsheets.AddLast Self
+	
+		
+	End Method
+
+	Function Init()
+		
+	
+		#If NATIVEFONTSON then
+		
+		xfont1 = New blFont(xfont1name, kscalefont)
+		
+		#Else
+		
+		xfont1 = New blFont("Consolas")
+		
+		#EndIf
+		
+		'xfont1 = New blFont("Consolas")
+		
+		
+		SetScale
+		
+		
+	End Function
+	
+	Function SetScale()
+			
+		'		xkscale = 4 + kscale
+		
+		xkscale = xfont1.GetTextWidth("W", 0)
+		
+		'		ykscale = 8 + kscale * 2
+		
+		ykscale = xfont1.GetTextHeight("W", 0) + 2
+		
+		'		hcaret = 7 + kscale * 2
+
+		hcaret = ykscale - 1
+
+		'         ftext = New Font("Courier New", emSize:=kscale + 7)
+  
+		'         numlineinpage = (Height - 32) / ykscale
+		'         numcolinpage = (Width - ww2 - 32) / xkscale
+			
+	
+	End Function
+	
+	
+	
+	
+	Method DrawSheet(canv:Canvas, x1, y1, x2, y2)
+	
+		'canv.SetColor 0.5, 0.9, 0.5
+		
+		'canv.SetColor 0.5, 0.5, 0.5
+		
+		If leftshsplitter Then xo1 = leftshsplitter.X1 Else xo1 = 0
+		If rightshsplitter Then xo2 = rightshsplitter.X2 Else xo2 = 1
+		
+		If topshsplitter Then yo1 = topshsplitter.Y1 Else yo1 = 0
+		If bottomshsplitter Then yo2 = bottomshsplitter.Y2 Else yo2 = 1
+		
+		IdeUiSetCanvas canv, IDEUI_SHEET_BG
+		
+		Local xca1 '= GetAbsX(xo1)
+		Local yca1 '= GetAbsY(yo1)
+		Local xca2 '= GetAbsX(xo2) - xca1
+		Local yca2 '= GetAbsY(yo2) - yca1
+		
+		xca1 = xo1 * x2
+		yca1 = yo1 * y2
+		xca2 = xo2 * x2 - xca1
+		yca2 = yo2 * y2 - yca1
+				
+		
+		'If focussheet = Self Then canv.SetColor 1, 1, 0
+		
+		'canv.DrawRect(x1 + xca1 + 4, y1 + yca1 + 4, x1 + xca2 - 8, y1 + yca2 - 8)
+		'canv.DrawRect(x1 + xca1 + 4, y1 + yca1 + 4, xca2 - 8, yca2 - 8)
+		
+		
+		If focussheet = Self and actfocusmode = idfocus Then
+			
+			IdeUiSetCanvas canv, IDEUI_WIN_SEL
+			canv.DrawRect(x1 + xca1, y1 + yca1, xca2, yca2)
+		
+			cursorvis = 1
+			cursorvis2 = 1
+			
+			
+		Else
+			
+			cursorvis = 0
+			
+		EndIf
+		
+		
+		
+		canv.SetColor 0.1, 0.1, 0.3
+		'canv.DrawRect(x1 + xca1 + 5, y1 + yca1 + 5, x1 + xca2 - 10, y1 + yca2 - 10)
+		canv.DrawRect(x1 + xca1 + 5, y1 + yca1 + 5, xca2 - 10, yca2 - 10)
+		
+		'		canv.SetColor 0.1, 0.1, 0.6
+		'		canv.DrawRect(x1 + xca1 + 15, y1 + yca1 + 15, xca2 - 30, yca2 - 30)
+		
+		'canv.DrawRect(x1, y1, x2, y2)
+		
+		Local xs = xca1 + x1 + 5
+		Local ys = yca1 + y1 + 5
+		
+		Local ys2 = ys + 20
+		Local hs2 = yca2 - 25
+		
+		'canv.DrawRect(xs, ys, xca2, yca2)
+		
+		Local xx = 0
+	
+		canv.SetColor 1, 1, 1
+		
+		Local isempty = 1
+		
+		Local i = 0
+		
+		For Local o:= EachIn childsboxes
+			' i riquadri di disegno non hanno un documento di testo
+			' un riquadro puo' essere di testo (doc) o di disegno (draw): la linguetta
+			' ha bisogno solo del nome, che sta nella base comune blDoc.
+			Local dc:blDoc = o.doc
+			If dc = Null Then dc = o.draw
+			If dc = Null Then Continue
+			
+			isempty = 0
+			
+			Local xoffbox
+			
+			Local nf:= dc.projname
+			If o.doc <> Null And o.doc.textchanged Then nf = nf + "*"
+			
+			Local ww = font1.GetTextWidth(nf, 0)
+						
+			
+			If o = mainbox Then ww = ww + 20
+				
+			'If isfocus = i Then
+			If focusbox = o Then
+				IdeUiSetCanvas canv, IDEUI_TAB_ACTIVE
+			Else
+				IdeUiSetCanvas canv, IDEUI_TAB_INACTIVE
+			EndIf
+				
+			If xx + ww + 34 > xca2 and i > 0 Then xx = 0; ys = ys + 22; ys2 = ys2 + 22; hs2 = hs2 - 22
+			
+			canv.DrawRect(xs + xx, ys, ww + 30, 20)
+			If blForceCanvasFlush Then canv.Flush
+						
+			canv.SetColor 1, 1, 1
+			
+			'main project
+			If o = mainbox Then
+				canv.DrawImageRect(objsimg, xs + xx + 4, ys + 3, 8, 63, 8, 8, 0, 2.2, 2.2)
+				If blForceCanvasFlush Then canv.Flush
+				xoffbox = 20
+			EndIf
+			
+			'file name
+			'font1.DrawText(canv, nf, xs + xx + 7 + xoffbox, ys + 2, COLOR_BLACK, 4, 1)
+			font1.DrawText(canv, nf, xs + xx + 7 + xoffbox, ys + 4, IdeUiFileNameColor(), 4, 1)
+			
+			canv.SetColor 1, 1, 1
+
+			'close box
+			Local xcl = 0
+			If o.isonx Then xcl = 16 ' canv.SetColor 1, 0, 0
+					
+			canv.DrawImageRect(objsimg, xs + xx + ww + 12, ys + 3, xcl, 0, 14, 14)
+			If blForceCanvasFlush Then canv.Flush
+							
+			'canv.SetColor 0.1, 0.1, 0.1
+								
+			xx = xx + ww + 34
+						
+			i = i + 1
+			'Print o.filename
+			
+		Next
+		
+		Select isempty
+		
+			Case 0
+			
+				For Local proj:= EachIn childsboxes
+					' i riquadri di disegno non hanno un documento di testo
+					' qui NON si salta il riquadro di disegno: lo smista DrawDrawBox piu' sotto.
+					
+					'If proj.num = isfocus Then
+					
+					'proj.DrawTextBox(canv, xca1 + x1, yca1 + y1, xca2, yca2)
+					If focusbox = proj Then
+					
+						' un riquadro di disegno si disegna in 3D, non come testo
+						If proj.draw <> Null Then
+							proj.DrawDrawBox(canv, xca1 + x1, ys2 + 22, xca2, hs2 - 22)
+						Else
+							proj.DrawTextBox(canv, xca1 + x1, ys2 + 22, xca2, hs2 - 22)
+						EndIf
+					
+					 
+						canv.SetColor 1, 1, 1
+						
+						canv.SetScissor xca1 + x1, ys2, xca2 - 2, hs2 - 44
+						
+						' il percorso vale per entrambi i tipi: il nome sta nella base comune blDoc
+						Local dd:blDoc = proj.doc
+						If dd = Null Then dd = proj.draw
+						If dd <> Null Then DrawString(canv, font1, SheetDisplayPath(dd.fullname), xs + 3, ys2 + 7, IdeUiFileNameColor(), 0, 1)
+						
+						canv.SetScissor 0, 0, DeviceWidth, DeviceHeight
+						
+						'Local tw:= xkscale * perc.Length  ' * font1.GetTextWidth("A", 0)
+						'DrawString(canv, font1, perc, x1 + x2 - 5, y1 + y2 - 20, -1, 2, 1)
+					 
+					EndIf
+					If blForceCanvasFlush Then canv.Flush
+					
+				Next
+			
+				
+				If focussheet.focusbox Then
+				
+					'barra in fondo
+					Local ybs = DeviceHeight - 20
+					'focusbox.MySetColor canv, 40, 40, 40
+					canv.SetColor 0.2, 0.2, 0.2
+					canv.DrawRect(0, ybs, ScrW, 20)
+					If blForceCanvasFlush Then canv.Flush
+	
+					Local txtp:String = "Line: " + (focussheet.focusbox.linecaret + 1) + "  Char: " + (focussheet.focusbox.xposcaret + 1) '+ "   " + numcolinpage '+ "   " + GetCursorX
+		
+					Local perc:String = Int(kscalefont / 16.0 * 100) + "%"
+			
+					canv.SetColor 1, 1, 1
+					DrawString(canv, font1, txtp + "        " + perc, 6, ybs + 4, -1, 0, 1)
+					If blForceCanvasFlush Then canv.Flush
+		
+				EndIf
+				
+			
+			Case 1
+			
+			
+			
+		End
+			
+	End Method
+
+	
+	
+	Method UpdateSheet(x1, y1, x2, y2)
+	
+		'canv.SetColor 0.5, 0.9, 0.5
+		
+		Local xca1 '= GetAbsX(xo1)
+		Local yca1 '= GetAbsY(yo1)
+		Local xca2 '= GetAbsX(xo2) - xca1
+		Local yca2 '= GetAbsY(yo2) - yca1
+		
+		xca1 = xo1 * x2
+		yca1 = yo1 * y2
+		xca2 = xo2 * x2 - xca1
+		yca2 = yo2 * y2 - yca1
+		
+		'canv.DrawRect(x1 + xca1, y1 + yca1, x1 + xca2 - 1, y1 + yca2 - 1)
+		'canv.DrawRect(x1, y1, x2, y2)
+		
+		Local xs = xca1 + x1 + 5
+		Local ys = yca1 + y1 + 5
+		
+		Local ys2 = ys + 20
+		Local hs2 = yca2 - 25
+		
+		'Local maxx = xs + xca2
+		
+		'canv.DrawRect(xs, ys, xca2, yca2)
+		
+		Local xx = 0
+	
+		'canv.SetColor 1, 1, 1
+		
+		Local i = 0
+		
+		'If canv.Font Then
+	
+			
+		idfocus = 1
+		
+		
+		For Local o:= EachIn childsboxes
+			' i riquadri di disegno non hanno un documento di testo: come in DrawSheet,
+			' si ripiega su o.draw. Senza questo fallback l'intera riga (hover, drag,
+			' e la X di chiusura) veniva saltata per ogni blDrawbox.
+			Local dc:blDoc = o.doc
+			If dc = Null Then dc = o.draw
+			If dc = Null Then Continue
+
+			Local xoffbox
+
+			Local nf:= dc.projname
+			If o.doc <> Null And o.doc.textchanged Then nf = nf + "*"
+
+			Local ww = font1.GetTextWidth(nf, 0)
+
+			If o = mainbox Then ww = ww + 20; xoffbox = 20
+						
+			'			If isfocus Then
+			'				canv.SetColor 0.7, 0.7, 0.2
+			'			Else
+			'				canv.SetColor 0.3, 0.5, 0.7
+			'			EndIf
+				 
+			If xx + ww + 34 > xca2 and i > 0 Then xx = 0; ys = ys + 22; ys2 = ys2 + 22; hs2 = hs2 - 22
+			
+			
+			If xmou > xs + xx and xmou < xs + xx + ww + 18 and ymou > ys and ymou < ys + 18 Then
+			
+				If touchhit Then
+
+					If nochangefocus = 0 Then
+					
+						focusbox = o
+						SetFocusSheet(actsheet)
+				
+						actfocusmode = idfocus
+					
+					EndIf
+					
+				EndIf
+				
+				If boxmove = Null and touchdown Then
+					
+					boxmove = o
+					boxmovex = xs + xx - xmou
+					boxmovey = ys - ymou
+					boxmovew = ww + 30
+					boxtextx = 7 + xoffbox
+					
+				EndIf
+				
+				If boxmove Then
+					
+					boxmoveon = o
+					
+					If xmou > xs + xx + (ww + 34) / 2 Then
+						boxmovelr = 1
+					Else
+						boxmovelr=0
+					EndIf
+				
+				EndIf
+				
+			EndIf
+			
+			'canv.DrawRect(xs + xx, ys, ww + 18, 18)
+			
+			Local x3 = xs + xx + ww + 12
+			
+			If xmou > x3 and xmou < x3 + 14 and ymou > ys + 3 and ymou < ys + 17 Then
+				
+				o.isonx = 1
+				
+				If touchrel Then
+					
+					o.CloseBox(Self)
+					
+				EndIf
+				
+			Else
+				o.isonx = 0
+			EndIf
+			
+			'canv.DrawImageRect(objsimg, xs + xx + ww + 20, ys + 3, 0, 0, 14, 14)
+			
+			
+			'canv.SetColor 1,1,1
+			'canv.DrawText(nf, xs + xx, ys + 2)
+			
+			xx = xx + ww + 34
+			
+			'If xx > xca2 Then xx = 0; ys = ys + 20
+			
+			i = i + 1
+			'Print o.filename
+			
+		Next
+		'EndIf
+	
+		
+		For Local proj:= EachIn childsboxes
+					
+			'If proj.num = isfocus Then
+					
+			'proj.DrawTextBox(canv, xca1 + x1, yca1 + y1, xca2, yca2)
+			If focusbox = proj Then
+			
+				' un riquadro di disegno si disegna in 3D, non come testo
+				If proj.draw <> Null Then
+					If nochangefocus = 0 Then proj.UpdateDrawBox(xca1 + x1, ys2, xca2, hs2)
+				Else
+					If nochangefocus = 0 Then proj.UpdateTextBox(xca1 + x1, ys2, xca2, hs2)
+				EndIf
+			
+				
+				'				If IsOnRect(xca1 + x1, ys2, xca2, hs2) Then
+				'
+				'					proj.UpdateMouseWheel 'UpdateSheetMouseWheel() 'x1 + xca1, y1 + yca1, xca2, yca2)
+				'
+				'					'Print Millisecs + " ---> " + numx + "," + (xwe + xca1) + "," + (ywe + yca1)
+				'
+				'
+				'				EndIf
+				
+				'If actsheet = focussheet Then proj.UpdateTextBoxKeyb(x1, y1, x2, y2)
+				If actsheet = focussheet Then
+					
+					If replstr = 1 Then proj.ReplaceString(xca1 + x1, ys2, xca2, hs2); replstr = 0
+					
+					If replstr = 2 Then proj.ReplaceAllString(xca1 + x1, ys2, xca2, hs2); replstr = 0
+				 
+					If replstr = 100 Then FindString; proj.CaretOutOfScreen(xca1 + x1, ys2, xca2, hs2); replstr = 0
+					
+					If replstr > 200 Then
+						
+						Local gol = replstr - 200
+					
+						proj.GoToLine gol
+						
+						blEvents.SetGotoLineVisible(0)
+						
+						replstr = 0
+						
+					EndIf
+					
+					If nochangefocus = 0 Then
+						' un riquadro di disegno si disegna in 3D, non come testo
+						If proj.draw <> Null Then
+							proj.UpdateDrawBoxOne(xca1 + x1, ys2, xca2, hs2)
+						Else
+							proj.UpdateTextBoxOne(xca1 + x1, ys2, xca2, hs2)
+						EndIf
+					EndIf
+				
+				EndIf
+				 
+			EndIf
+			
+			
+			'EndIf
+					
+		Next
+		
+		
+		'If replstr = 1 Then focussheet.focusbox.ReplaceString(xca1 + x1, ys2, xca2, hs2); replstr = 0
+				
+		'If replstr = 2 Then focussheet.focusbox.ReplaceAllString(xca1 + x1, ys2, xca2, hs2); replstr = 0
+				 
+		
+		'focussheet.focusbox.UpdateTextBoxKeyb(x1, y1, x2, y2)
+		
+		'If replstr = -1 Then replstr = 0
+		
+		If nochangefocus > 0 Then nochangefocus = nochangefocus - 1
+		
+		
+	End Method
+	
+	'	Method IsOnBoxProjName(x1, y1, x2, y2)
+	'
+	'		Local xca1 '= GetAbsX(xo1)
+	'		Local yca1 '= GetAbsY(yo1)
+	'		Local xca2 '= GetAbsX(xo2) - xca1
+	'		Local yca2 '= GetAbsY(yo2) - yca1
+	'
+	'		xca1 = xo1 * x2
+	'		yca1 = yo1 * y2
+	'		xca2 = xo2 * x2 - xca1
+	'		yca2 = yo2 * y2 - yca1
+	'
+	'
+	'
+	'
+	'
+	'	End
+	
+	Method IsOnSheet(x1, y1, x2, y2)
+		
+		Local xca1 '= GetAbsX(xo1)
+		Local yca1 '= GetAbsY(yo1)
+		Local xca2 '= GetAbsX(xo2) - xca1
+		Local yca2 '= GetAbsY(yo2) - yca1
+		
+		xca1 = xo1 * x2
+		yca1 = yo1 * y2
+		xca2 = xo2 * x2 - xca1
+		yca2 = yo2 * y2 - yca1
+		
+		Return IsOnRect(x1 + xca1, y1 + yca1, xca2, yca2)
+		
+		
+	End Method
+	
+	Method MoveIntoSheet(b1:blGraphic, b2:blGraphic, lr)
+	
+		Local tt:= childsboxes.ToArray
+		
+		Local L:= New List<blGraphic>
+		
+		'Local mp:Mytextbox
+		
+		For Local i:int = 0 To tt.Length - 1
+		
+			'If tt[i].num = idmainproject Then mp = tt[i]
+			If tt[i] <> b1 Then
+			
+				If tt[i] = b2 Then
+				
+					If lr = 0 Then
+						L.AddLast(b1)
+						L.AddLast(b2)
+					Else
+						L.AddLast(b2)
+						L.AddLast(b1)
+					EndIf
+			
+					Continue
+			
+				EndIf
+			
+				L.AddLast tt[i]
+			
+			EndIf
+		Next
+							
+		childsboxes = L
+	
+	
+	End Method
+	
+	Method UpdateSheetMouseWheel(x1, y1, x2, y2)
+	
+		Local xca1 '= GetAbsX(xo1)
+		Local yca1 '= GetAbsY(yo1)
+		Local xca2 '= GetAbsX(xo2) - xca1
+		Local yca2 '= GetAbsY(yo2) - yca1
+		
+		xca1 = xo1 * x2
+		yca1 = yo1 * y2
+		xca2 = xo2 * x2 - xca1
+		yca2 = yo2 * y2 - yca1
+		
+		'canv.DrawRect(x1 + xca1, y1 + yca1, x1 + xca2 - 1, y1 + yca2 - 1)
+		'canv.DrawRect(x1, y1, x2, y2)
+		
+		Local xs = xca1 + x1
+		Local ys = yca1 + y1
+			
+		If zmou <> 0 Then
+			
+			If IsOnRect(xs, ys, xca2, yca2) Then
+			
+				If KeyDown(KEY_CONTROL) Then
+				
+				
+					'note: CHANGE FONT SIZE
+		
+					'kscale = kscale - zmou; SetScale
+					'If kscale < 1 Then kscale = 1
+					'If kscale > 12 Then kscale = 12
+					
+					kscalefont = kscalefont - zmou / 2.0
+					
+					If kscalefont < 8 Then kscalefont = 8
+					If kscalefont > 32 Then kscalefont = 32
+					
+					xfont1 = New blFont(xfont1name, kscalefont)
+					
+					SetScale
+				
+				Else
+					
+					'Local nosetvbar:Bool = False
+		
+					
+					'If Self.focusbox and focussheet = Self Then
+					
+					'	Self.focusbox.UpdateMouseWheel
+					'focusbox.UpdateTextBox(x1, y1, x2, y2)
+				
+					'EndIf
+					 
+				
+					'					KPROVA = KPROVA + zmou * 5
+					'
+					'					xfont1 = New blFont(xfont1name, kscalefont)
+					'					xfont2 = New blFont("Times New Roman", 15)
+					
+				
+				
+					'nosetvbar = True
+				
+					
+					
+			
+				EndIf
+			EndIf
+				
+		EndIf
+		
+		
+	
+		
+	End Method
+	
+	
+	Method AddTextBox(filename:String, ln)
+		
+		'********
+		'For Local o1:= EachIn blSheet.allsheets
+			
+		filename = AdjustPath(filename)
+		
+		For Local o1:= EachIn blSheet.allsheets
+			
+			For Local proj:= EachIn o1.childsboxes
+				' i riquadri di disegno non hanno un documento di testo
+				If proj.doc = Null Then Continue
+			
+				If SheetPathsEqual(proj.doc.fullname, filename) Then
+			   	
+					focussheet = o1
+					focussheet.focusbox = proj
+				
+					If ln <> 0 Then
+				
+						Local ln2 = Abs(ln)
+				
+						Local kl = focussheet.focusbox.numlineinpage / 2
+				
+						focussheet.focusbox.line = ln2 - kl
+						If focussheet.focusbox.line < 0 Then focussheet.focusbox.line = 0
+				
+						focussheet.focusbox.VSBar.value = focussheet.focusbox.line
+						focussheet.focusbox.VSBar.SetOBARFromValue
+				
+						If ln < 0 Then focussheet.focusbox.lineerror = ln2
+				
+					EndIf
+				
+					Return
+			   
+				EndIf
+						
+			Next
+			
+		Next
+		
+		Local O:= New blTextbox(filename)
+		
+		focussheet.childsboxes.AddLast O
+		
+		focussheet.focusbox = O
+		
+		focussheet.focusbox.MakeLines
+		
+		If ln > - 1 Then
+				
+			focussheet.focusbox.line = ln - 2
+			
+			If focussheet.focusbox.line < 0 Then focussheet.focusbox.line = 0
+			
+			focussheet.focusbox.VSBar.value = focussheet.focusbox.line
+			focussheet.focusbox.VSBar.SetOBARFromValue
+				
+		
+					
+		EndIf
+		
+		'O.MakeLines
+		
+		
+		'focusbox = childsboxes.Last
+		
+		'blTextbox.MakeLinesAll
+		
+	End
+	
+	Method AddTextBox(bldoc:blDocument)
+		
+		Local O:= New blTextbox(bldoc)
+		
+		childsboxes.AddLast O
+		
+		'focusbox = childsboxes.Last
+	
+		'blTextbox.MakeLinesAll
+		
+	End
+	
+
+	Function SplitRight()
+	
+		Local sheetactual:= focussheet
+			
+		'If sheetactual.leftshsplitter Then sheetactual.xo1 = sheetactual.leftshsplitter.X1
+		'If sheetactual.rightshsplitter Then sheetactual.xo2 = sheetactual.rightshsplitter.X2
+		
+		'If sheetactual.topshsplitter Then sheetactual.yo1 = sheetactual.topshsplitter.Y1
+		'If sheetactual.bottomshsplitter Then sheetactual.yo2 = sheetactual.bottomshsplitter.Y2
+				
+		Local D:= focussheet.focusbox.doc
+			
+		Local xnew:= sheetactual.xo2
+		
+		sheetactual.xo2 = (sheetactual.xo2 + sheetactual.xo1) / 2.0
+			
+		CreateSheet(sheetactual.xo2, sheetactual.yo1, xnew, sheetactual.yo2)
+			
+		focussheet = blSheet.allsheets.Last
+		
+		Local sheetnew:= focussheet
+			
+		sheetnew.AddTextBox(D)
+			
+		sheetnew.focusbox = sheetnew.childsboxes.Last
+		sheetnew.focusbox.MakeLines2
+		
+			
+		Local sheetsplitter:= New blSheetsSplitter
+				
+		sheetsplitter.X1 = sheetactual.xo2
+		sheetsplitter.X2 = sheetactual.xo2
+		sheetsplitter.Y1 = sheetactual.yo1
+		sheetsplitter.Y2 = sheetactual.yo2
+		sheetsplitter.orient = 0
+		
+		sheetsplitter.topshsplitter = sheetactual.topshsplitter
+		sheetnew.topshsplitter = sheetactual.topshsplitter
+			
+		sheetsplitter.bottomshsplitter = sheetactual.bottomshsplitter
+		sheetnew.bottomshsplitter = sheetactual.bottomshsplitter
+				
+		blSheetsSplitter.sheetsplits.AddLast sheetsplitter
+			
+	
+		Local ssr:= sheetactual.rightshsplitter
+	
+		If ssr Then sheetnew.rightshsplitter = ssr
+		
+		sheetactual.rightshsplitter = sheetsplitter
+		sheetnew.leftshsplitter = sheetsplitter
+		
+		
+		Print "SPLIT RIGHT"
+		
+	End
+	
+	Function SplitLeft()
+	
+		Local sheetactual:= focussheet
+			
+		Local D:= focussheet.focusbox.doc
+			
+		Local xnew:= sheetactual.xo1
+		sheetactual.xo1 = (sheetactual.xo2 + sheetactual.xo1) / 2.0
+			
+		CreateSheet(xnew, sheetactual.yo1, sheetactual.xo1, sheetactual.yo2)
+		
+		focussheet = blSheet.allsheets.Last
+		
+		Local sheetnew:= focussheet
+			
+		sheetnew.AddTextBox(D)
+			
+		sheetnew.focusbox = sheetnew.childsboxes.Last
+		sheetnew.focusbox.MakeLines2
+		
+		Local sheetsplitter:= New blSheetsSplitter
+				
+		sheetsplitter.X1 = sheetactual.xo1
+		sheetsplitter.X2 = sheetactual.xo1
+		sheetsplitter.Y1 = sheetactual.yo1
+		sheetsplitter.Y2 = sheetactual.yo2
+		sheetsplitter.orient = 0
+		
+		sheetsplitter.topshsplitter = sheetactual.topshsplitter
+		sheetnew.topshsplitter = sheetactual.topshsplitter
+			
+		sheetsplitter.bottomshsplitter = sheetactual.bottomshsplitter
+		sheetnew.bottomshsplitter = sheetactual.bottomshsplitter
+			
+		blSheetsSplitter.sheetsplits.AddLast sheetsplitter
+		
+		Local ssl:= sheetactual.leftshsplitter
+		
+		If ssl Then sheetnew.leftshsplitter = ssl
+			
+		sheetactual.leftshsplitter = sheetsplitter
+		sheetnew.rightshsplitter = sheetsplitter
+		
+		Print "SPLIT LEFT"
+	
+	End Function
+	
+	Function SplitTop()
+	
+		Local sheetactual:= focussheet
+			
+		Local D:= focussheet.focusbox.doc
+			
+		Local ynew:= sheetactual.yo1
+		sheetactual.yo1 = (sheetactual.yo2 + sheetactual.yo1) / 2.0
+			
+		CreateSheet(sheetactual.xo1, ynew, sheetactual.xo2, sheetactual.yo1)
+		
+		focussheet = blSheet.allsheets.Last
+		
+		Local sheetnew:= focussheet
+			
+		sheetnew.AddTextBox(D)
+			
+		sheetnew.focusbox = sheetnew.childsboxes.Last
+		sheetnew.focusbox.MakeLines2
+		
+		Local sheetsplitter:= New blSheetsSplitter
+				
+		sheetsplitter.X1 = sheetactual.xo1
+		sheetsplitter.X2 = sheetactual.xo2
+		sheetsplitter.Y1 = sheetactual.yo1
+		sheetsplitter.Y2 = sheetactual.yo1
+		sheetsplitter.orient = 1
+		
+		sheetsplitter.leftshsplitter = sheetactual.leftshsplitter
+		sheetnew.leftshsplitter = sheetactual.leftshsplitter
+			
+		sheetsplitter.rightshsplitter = sheetactual.rightshsplitter
+		sheetnew.rightshsplitter = sheetactual.rightshsplitter
+			
+		blSheetsSplitter.sheetsplits.AddLast sheetsplitter
+		
+		Local sst:= sheetactual.topshsplitter
+		
+		If sst Then sheetnew.topshsplitter = sst
+			
+		sheetactual.topshsplitter = sheetsplitter
+		sheetnew.bottomshsplitter = sheetsplitter
+		
+		Print "SPLIT TOP"
+		
+	End Function
+	
+	Function SplitBottom()
+	
+		Local sheetactual:= focussheet
+			
+		Local D:= focussheet.focusbox.doc
+			
+		Local ynew:= sheetactual.yo2
+		sheetactual.yo2 = (sheetactual.yo2 + sheetactual.yo1) / 2.0
+			
+		CreateSheet(sheetactual.xo1, sheetactual.yo2, sheetactual.xo2, ynew)
+			
+		focussheet = blSheet.allsheets.Last
+		
+		Local sheetnew:= focussheet
+			
+		sheetnew.AddTextBox(D)
+			
+		sheetnew.focusbox = sheetnew.childsboxes.Last
+		sheetnew.focusbox.MakeLines2
+		
+		Local sheetsplitter:= New blSheetsSplitter
+				
+		sheetsplitter.X1 = sheetactual.xo1
+		sheetsplitter.X2 = sheetactual.xo2
+		sheetsplitter.Y1 = sheetactual.yo2
+		sheetsplitter.Y2 = sheetactual.yo2
+		sheetsplitter.orient = 1
+		
+		sheetsplitter.leftshsplitter = sheetactual.leftshsplitter
+		sheetnew.leftshsplitter = sheetactual.leftshsplitter
+			
+		sheetsplitter.rightshsplitter = sheetactual.rightshsplitter
+		sheetnew.rightshsplitter = sheetactual.rightshsplitter
+			
+		blSheetsSplitter.sheetsplits.AddLast sheetsplitter
+		
+		Local ssb:= sheetactual.bottomshsplitter
+		
+		If ssb Then sheetnew.bottomshsplitter = ssb
+			
+		sheetactual.bottomshsplitter = sheetsplitter
+		sheetnew.topshsplitter = sheetsplitter
+		
+		Print "SPLIT BOTTOM"
+		
+	End Function
+
+	'note: CLOSE SHEET
+	
+	Function CloseSheet(sheetToClose:blSheet)
+	
+	
+		If Not sheetToClose Then Return
+		
+		'Local sheetToClose:= focussheet
+				
+		blSheet.allsheets.Remove(sheetToClose)
+		
+			
+		For Local splitter:= EachIn blSheetsSplitter.sheetsplits
+		
+			splitter.leftshref = 0
+			splitter.rightshref = 0
+			splitter.topshref = 0
+			splitter.bottomshref = 0
+			
+			For Local sheet:= EachIn blSheet.allsheets
+					
+				If sheet.leftshsplitter = splitter Then splitter.leftshref = 1
+				If sheet.rightshsplitter = splitter Then splitter.rightshref = 1
+				If sheet.topshsplitter = splitter Then splitter.topshref = 1
+				If sheet.bottomshsplitter = splitter Then splitter.bottomshref = 1
+			
+			Next
+						
+		Next
+		
+		Local shtop:= sheetToClose.topshsplitter
+		Local shleft:= sheetToClose.leftshsplitter
+		Local shbottom:= sheetToClose.bottomshsplitter
+		Local shright:= sheetToClose.rightshsplitter
+		
+		
+		If shtop and shbottom Then
+			
+			Local k = SetNewSheetSplitter(shtop, shbottom)
+			
+			If k Then SetNewSheetSplitter(shbottom, shtop)
+			
+		ElseIf shtop Then
+		
+			SetNewSheetSplitter(shtop, shbottom)
+		
+		Else
+		
+			SetNewSheetSplitter(shbottom, shtop)
+		
+		EndIf
+		
+		
+		
+		If shleft and shright Then
+						
+			Local k = SetNewSheetSplitter(shleft, shright)
+			
+			If k Then SetNewSheetSplitter(shright, shleft)
+			
+		ElseIf shleft Then
+					
+			SetNewSheetSplitter(shleft, shright)
+					
+		Else
+		
+			SetNewSheetSplitter(shright, shleft)
+					
+		EndIf
+		
+	
+		
+		For Local splitter:= EachIn blSheetsSplitter.sheetsplits
+						
+			Local cancspl = 1
+		
+			For Local sheet:= EachIn blSheet.allsheets
+				
+				If sheet.topshsplitter = splitter Then cancspl = 0
+				If sheet.rightshsplitter = splitter Then cancspl = 0
+				If sheet.bottomshsplitter = splitter Then cancspl = 0
+				If sheet.leftshsplitter = splitter Then cancspl = 0
+				
+			Next
+			
+			If cancspl Then blSheetsSplitter.sheetsplits.Remove(splitter)
+			
+		Next
+			
+		
+		If Not blSheet.allsheets.IsEmpty()
+		
+			focussheet = blSheet.allsheets.First()
+					
+		Else
+			
+			focussheet = Null
+		
+		Endif
+		
+		'Print "SHEET CLOSED"
+		
+	End Function
+
+	Function SetNewSheetSplitter(oldshs:blSheetsSplitter, newshs:blSheetsSplitter)
+	
+	
+		For Local sheet:= EachIn blSheet.allsheets
+			
+			If sheet.topshsplitter = oldshs Then
+				
+				If sheet.topshsplitter Then
+					If sheet.topshsplitter.bottomshref = 0 Then
+						sheet.topshsplitter = newshs
+						
+						SetNewSheetSplitter2(oldshs, newshs)
+						
+					EndIf
+				EndIf
+			
+			EndIf
+		
+			If sheet.bottomshsplitter = oldshs Then
+				
+				If sheet.bottomshsplitter Then
+					If sheet.bottomshsplitter.topshref = 0 Then
+						sheet.bottomshsplitter = newshs
+						
+						SetNewSheetSplitter2(oldshs, newshs)
+						
+					Else
+						
+						Return 1
+						
+					EndIf
+				EndIf
+			
+			EndIf
+		
+			'
+			
+			If sheet.rightshsplitter = oldshs Then
+				
+				If sheet.rightshsplitter Then
+					If sheet.rightshsplitter.leftshref = 0 Then
+						sheet.rightshsplitter = newshs
+						
+						SetNewSheetSplitter2(oldshs, newshs)
+												
+					EndIf
+				EndIf
+			
+			EndIf
+		
+			If sheet.leftshsplitter = oldshs Then
+				
+				If sheet.leftshsplitter Then
+					If sheet.leftshsplitter.rightshref = 0 Then
+						sheet.leftshsplitter = newshs
+						
+						SetNewSheetSplitter2(oldshs, newshs)
+						
+					Else
+						
+						Return 1
+						
+					EndIf
+				EndIf
+			
+			EndIf
+			
+		
+		Next
+	
+	
+		
+	End
+	
+	Function SetNewSheetSplitter2(oldshs:blSheetsSplitter, newshs:blSheetsSplitter)
+
+		For Local sheetspl:= EachIn blSheetsSplitter.sheetsplits
+		
+			If sheetspl.topshsplitter = oldshs Then sheetspl.topshsplitter = newshs
+			
+			If sheetspl.bottomshsplitter = oldshs Then sheetspl.bottomshsplitter = newshs
+			
+			If sheetspl.leftshsplitter = oldshs Then sheetspl.leftshsplitter = newshs
+			
+			If sheetspl.rightshsplitter = oldshs Then sheetspl.rightshsplitter = newshs
+				
+			
+		Next
+		
+	End
+	
+	Function SetNewSheetSplitterold(oldshs:blSheetsSplitter, newshs:blSheetsSplitter, mo)
+	
+		Local k = 1
+		
+		For Local sheet:= EachIn blSheet.allsheets
+			
+			If sheet.topshsplitter = oldshs Then
+			
+				Local e = 1
+				
+				If mo = 0 and sheet.topshsplitter Then If sheet.topshsplitter.topshref > k Then e = 0
+				
+				If mo = 1 and sheet.topshsplitter Then If sheet.topshsplitter.bottomshref > k Then e = 0
+				
+				If e Then sheet.topshsplitter = newshs
+			 
+			EndIf
+			
+			If sheet.bottomshsplitter = oldshs Then
+			
+				Local e = 1
+				
+				If mo = 1 and sheet.bottomshsplitter Then If sheet.bottomshsplitter.bottomshref > k Then e = 0
+				
+				If mo = 0 and sheet.bottomshsplitter Then If sheet.bottomshsplitter.topshref > k Then e = 0
+				
+				If e Then sheet.bottomshsplitter = newshs
+			
+			EndIf
+			
+			
+			If sheet.leftshsplitter = oldshs Then
+			
+				Local e = 1
+				
+				If mo = 0 and sheet.leftshsplitter Then If sheet.leftshsplitter.leftshref > k Then e = 0
+				
+				If mo = 1 and sheet.leftshsplitter Then If sheet.leftshsplitter.rightshref > k Then e = 0
+			
+				
+				If e Then sheet.leftshsplitter = newshs
+			
+			EndIf
+		
+			
+			If sheet.rightshsplitter = oldshs Then
+			
+				Local e = 1
+				
+				If mo = 1 and sheet.rightshsplitter Then If sheet.rightshsplitter.rightshref > k Then e = 0
+				
+				If mo = 0 and sheet.rightshsplitter Then If sheet.rightshsplitter.leftshref > k Then e = 0
+				
+				If e Then sheet.rightshsplitter = newshs
+				
+			EndIf
+		
+		
+		Next
+	
+		
+	End
+	
+End
+
+Class blSheetsSplitter
+	
+	Global sheetsplits:= New List<blSheetsSplitter>
+
+	Field X1:Float
+	Field Y1:Float
+	Field X2:Float
+	Field Y2:Float
+	
+	Field x1, y1, x2, y2
+		
+	Field orient
+	
+	Field drawon
+	
+	Field dragging
+	Field dragoffset
+	
+	Field leftshsplitter:blSheetsSplitter
+	Field rightshsplitter:blSheetsSplitter
+	Field topshsplitter:blSheetsSplitter
+	Field bottomshsplitter:blSheetsSplitter
+	
+	Field leftshref
+	Field rightshref
+	Field topshref
+	Field bottomshref
+	
+	Const minsize = 80
+	
+	Field leftlim '= 80
+	Field toplim '= 80
+	Field rightlim '= 80
+	Field bottomlim '= 80
+	
+	'for load/save only
+	Field ID
+	
+	Method DrawSheetSplitter(canv:Canvas, x1, y1, x2, y2)
+		
+		If orient = 1 Then
+			If leftshsplitter Then X1 = leftshsplitter.X1 Else X1 = 0 'X
+			If rightshsplitter Then X2 = rightshsplitter.X2 Else X2 = 1 'X
+		EndIf
+		
+		If orient = 0 Then
+			If topshsplitter Then Y1 = topshsplitter.Y1 Else Y1 = 0 'Y
+			If bottomshsplitter Then Y2 = bottomshsplitter.Y2 Else Y2 = 1 'Y
+		EndIf
+		
+		
+		Local xca1 '= GetAbsX(xo1)
+		Local yca1 '= GetAbsY(yo1)
+		Local xca2 '= GetAbsX(xo2) - xca1
+		Local yca2 '= GetAbsY(yo2) - yca1
+		
+		xca1 = X1 * x2
+		yca1 = Y1 * y2
+		xca2 = X2 * x2 '- xca1
+		yca2 = Y2 * y2 '- yca1
+		
+		Self.x1 = x1 + xca1
+		Self.x2 = x1 + xca2
+		Self.y1 = y1 + yca1
+		Self.y2 = y1 + yca2
+		
+		'canv.SetColor 1, 1, 0
+		
+		'canv.DrawLine(x1 + xca1, y1 + yca1, x1 + xca2, y1 + yca2)
+			
+		'*new*
+		If drawon Then
+		
+			canv.SetColor 0, 1, 0.4
+		
+			Select orient
+		
+				Case 0
+					canv.DrawRect(x1 + xca1 - 3, y1 + yca1, 6, yca2)
+
+				Case 1
+					canv.DrawRect(x1 + xca1, y1 + yca1 - 3, xca2, 6)
+
+			End
+		
+		EndIf
+		
+		
+	
+	End Method
+	
+	Method UpdateSheetSplitter(x1, y1, x2, y2)
+	
+		Local xca1 '= GetAbsX(xo1)
+		Local yca1 '= GetAbsY(yo1)
+		Local xca2 '= GetAbsX(xo2) - xca1
+		Local yca2 '= GetAbsY(yo2) - yca1
+		
+		xca1 = X1 * x2 + x1
+		yca1 = Y1 * y2 + y1
+		xca2 = X2 * x2 + x1  '- xca1
+		yca2 = Y2 * y2 + y1 '- yca1
+		
+		'Self.x1 = xca1
+		'Self.x2 = xca2
+		'Self.y1 = yca1
+		'Self.y2 = yca2
+		
+		'		Local xca1 = GetAbsX(X1) * x2 + x1 '+ xca
+		'		Local yca1 = GetAbsY(Y1) * y2 + y1 '+ yca
+		'		Local xca2 = GetAbsX(X2) * x2 + x1 '+ xca
+		'		Local yca2 = GetAbsY(Y2) * y2 + y1 '+ yca
+		'		Self.x1 = GetAbsX(X1) * x2
+		'		Self.x2 = GetAbsX(X2) * x2
+		'		Self.y1 = GetAbsY(Y1) * y2
+		'		Self.y2 = GetAbsY(Y2) * y2
+		'
+		'		Local xca1 = Self.x1 + x1 '+ xca
+		'		Local yca1 = Self.y1 + y1 '+ yca
+		'		Local xca2 = Self.x2 + x1 '+ xca
+		'		Local yca2 = Self.y2 + y1 '+ yca
+		
+		Select orient
+			
+			Case 0
+			
+				If ymou >= yca1 and ymou <= yca2 and xmou > xca1 - 5 and xmou < xca1 + 5 Then
+				
+					drawon = 1
+				
+					If touchhit Then
+																	
+						dragging = 1
+					
+						dragoffset = xmou - xca1
+					
+						
+						leftlim = x1 + minsize
+						
+						Local T:= GetLeftSheetSplitter
+							
+						If T Then leftlim = T.X1 * x2 + x1 + minsize
+					
+							
+						rightlim = x1 + x2 - minsize
+							
+						T = GetRightSheetSplitter
+						
+						If T Then rightlim = T.X1 * x2 + x1 - minsize
+												
+							
+					EndIf
+					
+				Else
+				
+					drawon = 0
+					
+				EndIf
+				
+				If dragging Then
+				
+					Self.x1 = xmou - dragoffset
+					
+												
+					If Self.x1 < leftlim Then Self.x1 = leftlim
+												
+					If Self.x1 > rightlim Then Self.x1 = rightlim
+											
+					
+					X1 = (Self.x1 - (Float(x1))) / Float(x2)
+					X2 = X1
+											
+				EndIf
+				
+			
+			Case 1
+			
+				If xmou >= xca1 and xmou <= xca2 and ymou > yca1 - 5 and ymou < yca1 + 5 Then
+				
+					drawon = 1
+					
+					If touchhit Then
+								
+						dragging = 1
+					
+						dragoffset = ymou - yca1
+						
+						
+						toplim = y1 + minsize
+						
+						Local T:= GetTopSheetSplitter
+							
+						If T Then toplim = T.Y1 * y2 + y1 + minsize
+							
+							
+						bottomlim = y1 + y2 - minsize
+							
+						T = GetBottomSheetSplitter
+					
+						If T Then bottomlim = T.Y1 * y2 + y1 - minsize
+							
+							
+					EndIf
+					
+				Else
+				
+					drawon = 0
+					
+				EndIf
+				
+				If dragging Then
+				
+					Self.y1 = ymou - dragoffset
+											
+						
+					If Self.y1 < toplim Then Self.y1 = toplim
+												
+					If Self.y1 > bottomlim Then Self.y1 = bottomlim
+						
+				
+					Y1 = (Self.y1 - (Float(y1))) / Float(y2)
+					Y2 = Y1
+										
+				EndIf
+								
+		End
+				
+		If touchrel Then dragging = 0
+		
+	End
+	
+	
+	Method GetLeftSheetSplitter:blSheetsSplitter()
+			
+		Local xs:Float
+		Local maxv:Float
+		
+		Local retshs:blSheetsSplitter
+		
+		For Local sheet:= EachIn blSheet.allsheets
+			
+			If sheet.rightshsplitter = Self Then
+			
+				If sheet.leftshsplitter Then xs = sheet.leftshsplitter.X1
+			
+				If xs > maxv Then maxv = xs; retshs = sheet.leftshsplitter
+			
+			EndIf
+			 	
+		Next
+		
+		Return retshs
+		
+	End
+	Method GetRightSheetSplitter:blSheetsSplitter()
+		
+		Local xs:Float
+		Local minv:Float = 1
+		
+		Local retshs:blSheetsSplitter
+		
+		For Local sheet:= EachIn blSheet.allsheets
+			
+			If sheet.leftshsplitter = Self Then
+			
+				If sheet.rightshsplitter Then xs = sheet.rightshsplitter.X1
+			
+				If xs < minv Then minv = xs; retshs = sheet.rightshsplitter
+			
+			EndIf
+				
+		Next
+		
+		Return retshs
+		
+	End
+	
+	Method GetTopSheetSplitter:blSheetsSplitter()
+		
+		Local ys:Float
+		Local maxv:Float
+		
+		Local retshs:blSheetsSplitter
+		
+		For Local sheet:= EachIn blSheet.allsheets
+			
+			If sheet.bottomshsplitter = Self Then
+			
+				If sheet.topshsplitter Then ys = sheet.topshsplitter.Y1
+			
+				If ys > maxv Then maxv = ys; retshs = sheet.topshsplitter
+				
+			EndIf
+				
+		Next
+		
+		Return retshs
+		
+	End
+	Method GetBottomSheetSplitter:blSheetsSplitter()
+		
+		Local ys:Float
+		Local minv:Float = 1
+		
+		Local retshs:blSheetsSplitter
+		
+		For Local sheet:= EachIn blSheet.allsheets
+			
+			If sheet.topshsplitter = Self Then
+			
+				If sheet.bottomshsplitter Then ys = sheet.bottomshsplitter.Y1
+			
+				If ys < minv Then minv = ys; retshs = sheet.bottomshsplitter
+			
+			EndIf
+				
+		Next
+		
+		Return retshs
+		
+	End
+	
+End
+
+
+Function SetFocusSheet(fs:blSheet)
+
+	focussheet = fs
+			
+End Function
+
+Function CreateSheet(x1:float, y1:float, x2:Float, y2:Float)
+	
+	Local O:= New blSheet(x1, y1, x2, y2)
+	'Return O
+	blSheet.allsheets.AddLast O
+	
+End Function
+
+Function OpenProject(fn:String, ln = 0)
+	
+	'note: OPEN PROJECT
+	
+	Local openfile:String
+	
+	If fn = "" Then
+		'Local f:String = "MSX Projects|*.msxproj|Assembler|*.asm;*.z80|Binary|*.rom;*.bin"
+		Local f:String = "CX File(*.cxs):cxs;All Files(*.*):*"
+	
+		Local stpa:String
+	
+		'stpa = ExtractDir(AppPath).Replace("\", "/") + "/examples2025/"
+	
+		'Print stpa
+	
+		openfile = RequestFile("Open File", f, False, stpa)
+	
+	Else
+	
+		openfile = fn
+		
+	EndIf
+		
+	'Return
+	
+	openfile = AdjustPath(openfile)
+	
+	If os.FileType(openfile) = os.FILETYPE_FILE Then
+		
+		
+		If mainscr.objs.IsEmpty Then blEvents.OnCreateDefaultLayout(); mainscr.CreateSplitters
+		
+		If blSheet.allsheets.IsEmpty Then blEvents.OnCreateDefaultSheet()
+		
+		focussheet.AddTextBox(openfile, ln)
+			
+		AddHistory(openfile)
+		CreateHistory
+		
+	EndIf
+		
+	
+End
+

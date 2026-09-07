@@ -1,0 +1,511 @@
+
+' blVideo - riproduzione di un .mp4 dentro una Image di mojo2.
+'
+' Il filmato NON e' una vista di sistema sovrapposta: e' una normale Image,
+' quindi si disegna sul Canvas come qualsiasi altra immagine. Si scala, si
+' ruota, si mette dentro un riquadro del layout, e ci si puo' disegnare sopra.
+'
+' Uso tipico:
+'
+'     Field vid:blVideo
+'
+'     ' in OnCreate
+'     vid = New blVideo("cerberus://data/run_1.mp4")
+'
+'     ' in OnUpdate
+'     vid.Update()
+'
+'     ' in OnRender
+'     vid.Draw(Canv, 40, 200, 400, 225)
+'
+' Il file dev'essere fra i dati dell'applicazione E dichiarato nei filtri del
+' builder, altrimenti non viene copiato:
+'
+'     #BINARY_FILES+="*.mp4"
+'
+' Implementato su Android (serve API 21, MediaCodec), su Windows (Media
+' Foundation, gia' parte del sistema), su macOS/iOS (AVFoundation, idem) e su
+' Linux (FFmpeg: libavformat/libavcodec/libswscale/libswresample, libreria
+' vera da installare a parte - vedi PORT-MAC-LINUX.md). Su html5 le chiamate
+' non fanno nulla e Draw non disegna: il codice chiamante non va cambiato,
+' semplicemente non si vede il filmato.
+
+Import mojo2
+Import brl.databuffer
+
+' convertBBString/convertBBStringToWide: usati dai nativi mac/ios/linux. Va
+' importato PRIMA dei .cpp che ne hanno bisogno.
+Import blNative
+
+
+' Quale implementazione nativa e' disponibile su questo target.
+#If TARGET="android"
+#BLVIDEO_NATIVE=1
+Import "native/blVideos-android.java"
+#EndIf
+
+#If TARGET="glfw" And HOST="winnt"
+#BLVIDEO_NATIVE=1
+Import "native/blVideos-win.cpp"
+
+' Il nativo dichiara le librerie di Media Foundation con #pragma comment(lib),
+' che vale solo per MSVC: con MinGW vanno passate al linker. Non c'e'
+' -lmfreadwrite perche' quella libreria di import manca in parecchie
+' distribuzioni MinGW: l'unica funzione che serviva da li' il nativo se la
+' prende a runtime dalla DLL.
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#GLFW_GCC_LIB_OPTS+="-lmfplat"
+#GLFW_GCC_LIB_OPTS+="-lmfuuid"
+#GLFW_GCC_LIB_OPTS+="-lole32"
+' GUID_NULL, usato dal nativo, sta in uuid
+#GLFW_GCC_LIB_OPTS+="-luuid"
+#EndIf
+
+
+#If TARGET="glfw" And HOST="macos"
+#BLVIDEO_NATIVE=1
+Import "native/blVideos-mac.cpp"
+
+' ATTENZIONE: #GLFW_GCC_CC_OPTS (come in blFonts-mac) NON serve a niente qui:
+' lo legge solo il builder GCC/MinGW (src/transcc/builders/glfw.cxs, ramo
+' Windows). Il target macOS Desktop compila con Xcode (MakeXcode chiama
+' xcodebuild sul progetto copiato) e ignora del tutto quella direttiva. Senza
+' un dialetto C++ abbastanza recente, std::thread coi suoi argomenti (usato
+' qui per il thread di decodifica) non compila - clang lo tratta come C++03 e
+' offre solo il costruttore a un argomento, non quello variadico - con
+' l'errore "no matching constructor for initialization of 'std::thread'".
+' Va impostato UNA VOLTA SOLA nel progetto: CLANG_CXX_LANGUAGE_STANDARD =
+' "gnu++17" nelle build configuration del target, dentro
+' targets/glfw3/template/xcode/CerberusGame.xcodeproj/project.pbxproj (vedi
+' PORT-MAC-LINUX.md). Probabile che serva anche a blFonts-mac, mai compilato
+' finora.
+
+' ATTENZIONE: a differenza del target ios, questo target (glfw3 Desktop) non
+' ha un meccanismo per aggiungere framework Xcode da un modulo (niente
+' #LIBS+=, vedi src/transcc/builders/glfw.cxs: MakeXcode copia il progetto
+' template cosi' com'e'). CoreVideo.framework e' gia' nel progetto;
+' AVFoundation.framework e CoreMedia.framework vanno aggiunti a mano, UNA
+' VOLTA SOLA, a targets/glfw3/template/xcode/CerberusGame.xcodeproj (vedi
+' PORT-MAC-LINUX.md) prima che questo modulo possa linkare.
+#EndIf
+
+
+#If TARGET="glfw" And HOST="linux"
+#BLVIDEO_NATIVE=1
+Import "native/blVideos-linux.cpp"
+
+' Niente decoder di sistema su Linux (a differenza di Media Foundation/
+' AVFoundation): serve FFmpeg, libreria vera da installare a parte -
+' pacchetti *-dev per compilare qui, i corrispondenti runtime (senza -dev)
+' per chi esegue l'app gia' compilata (vedi PORT-MAC-LINUX.md). L'header e'
+' nella posizione multiarch standard Debian/Ubuntu: su una distro diversa
+' (o un'altra architettura) questo -I potrebbe non servire o dover cambiare.
+#GLFW_GCC_CC_OPTS+="-std=gnu++11"
+#GLFW_GCC_CC_OPTS+="-I/usr/include/x86_64-linux-gnu"
+#GLFW_GCC_LIB_OPTS+="-lavformat"
+#GLFW_GCC_LIB_OPTS+="-lavcodec"
+#GLFW_GCC_LIB_OPTS+="-lswscale"
+#GLFW_GCC_LIB_OPTS+="-lswresample"
+#GLFW_GCC_LIB_OPTS+="-lavutil"
+#GLFW_GCC_LIB_OPTS+="-lopenal"
+#EndIf
+
+
+#If TARGET="ios"
+#BLVIDEO_NATIVE=1
+Import "native/blVideos-ios.cpp"
+
+' AVFoundation.framework e' gia' nel progetto template del target ios (lo usa
+' anche brl.admob): ridichiararlo duplicherebbe il riferimento. CoreMedia e
+' CoreVideo invece non ci sono: per questo target #LIBS+= funziona davvero
+' (src/transcc/builders/ios.cxs legge la lista e monta il progetto Xcode da
+' solo), quindi qui non serve toccare l'installazione.
+#LIBS+="CoreMedia.framework"
+#LIBS+="CoreVideo.framework"
+#EndIf
+
+
+#If BLVIDEO_NATIVE
+
+Extern
+
+Class BBblVideo
+
+	Method _Open:Bool(path:String)
+	Method _Play:Void()
+	Method _Pause:Void()
+	Method _SetLoop:Void(on:Bool)
+	Method _Close:Void()
+
+	Method _IsPlaying:Bool()
+	Method _IsFinished:Bool()
+	Method _HasFailed:Bool()
+
+	Method _Width:Int()
+	Method _Height:Int()
+
+	Method _CopyFrame:Bool(db:DataBuffer)
+
+End
+
+Public
+
+#EndIf
+
+
+#If BLVIDEO_NATIVE
+
+Class blVideo Extends BBblVideo
+
+#Else
+
+Class blVideo
+
+#EndIf
+
+	' Fotogramma corrente. E' una Image come tutte le altre.
+	Field img:Image
+
+	Field buf:DataBuffer
+
+	Field vw:Int
+	Field vh:Int
+
+	Field ok:Bool
+
+
+	Method New(path:String, loop:Bool = True, autoplay:Bool = True)
+
+		Open(path, loop, autoplay)
+
+	End
+
+
+	Method Open:Bool(path:String, loop:Bool = True, autoplay:Bool = True)
+
+		#If BLVIDEO_NATIVE
+
+		ok = _Open(path)
+
+		If Not ok Then Return False
+
+		_SetLoop(loop)
+
+		If autoplay Then _Play()
+
+		Return True
+
+		#Else
+
+		ok = False
+		Return False
+
+		#EndIf
+
+	End
+
+
+	Method Play:Void()
+
+		#If BLVIDEO_NATIVE
+		If ok Then _Play()
+		#EndIf
+
+	End
+
+
+	Method Pause:Void()
+
+		#If BLVIDEO_NATIVE
+		If ok Then _Pause()
+		#EndIf
+
+	End
+
+
+	Method SetLoop:Void(on:Bool)
+
+		#If BLVIDEO_NATIVE
+		If ok Then _SetLoop(on)
+		#EndIf
+
+	End
+
+
+	Method Close:Void()
+
+		#If BLVIDEO_NATIVE
+		If ok Then _Close()
+		#EndIf
+
+		ok = False
+		img = Null
+		buf = Null
+		vw = 0
+		vh = 0
+
+	End
+
+
+	Method IsPlaying:Bool()
+
+		#If BLVIDEO_NATIVE
+		If ok Then Return _IsPlaying()
+		#EndIf
+
+		Return False
+
+	End
+
+
+	Method IsFinished:Bool()
+
+		#If BLVIDEO_NATIVE
+		If ok Then Return _IsFinished()
+		#EndIf
+
+		Return False
+
+	End
+
+
+	' False se l'apertura o la decodifica sono fallite: utile per accorgersi
+	' del problema invece di guardare un rettangolo vuoto.
+	Method IsOk:Bool()
+
+		#If BLVIDEO_NATIVE
+		If Not ok Then Return False
+		Return Not _HasFailed()
+		#EndIf
+
+		Return False
+
+	End
+
+
+	Method Width:Int()
+
+		Return vw
+
+	End
+
+
+	Method Height:Int()
+
+		Return vh
+
+	End
+
+
+	' Da chiamare a ogni giro di OnUpdate: porta l'ultimo fotogramma decodificato
+	' dentro la Image. Se non ce n'e' uno nuovo non tocca la texture, quindi
+	' chiamarla piu' volte non costa nulla.
+	Method Update:Void()
+
+		#If BLVIDEO_NATIVE
+
+		If Not ok Then Return
+
+		Local w:Int = _Width()
+		Local h:Int = _Height()
+
+		If w < 1 Or h < 1 Then Return
+
+		' La dimensione vera si conosce solo al primo fotogramma (il decoder
+		' puo' applicare un ritaglio), quindi la Image si crea qui e si
+		' ricrea se cambia.
+		If img = Null Or w <> vw Or h <> vh Then
+
+			vw = w
+			vh = h
+
+			img = New Image(vw, vh, 0, 0)
+			buf = New DataBuffer(vw * vh * 4)
+
+		EndIf
+
+		If _CopyFrame(buf) Then img.WritePixels(0, 0, vw, vh, buf)
+
+		#EndIf
+
+	End
+
+
+	' Disegna il fotogramma corrente dentro il rettangolo dato, deformandolo
+	' per riempirlo. Non fa nulla finche' non e' arrivato il primo fotogramma.
+	Method Draw:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		If img = Null Then Return
+
+		canv.SetColor 1, 1, 1
+		canv.DrawRect(x, y, w, h, img)
+
+	End
+
+
+	' Come Draw ma conservando le proporzioni del filmato, centrandolo nel
+	' rettangolo (le bande restano vuote, non vengono riempite).
+	Method DrawFit:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float)
+
+		If img = Null Then Return
+		If vw < 1 Or vh < 1 Then Return
+
+		Local sc:Float = w / Float(vw)
+		Local sy:Float = h / Float(vh)
+
+		If sy < sc Then sc = sy
+
+		Local dw:Float = vw * sc
+		Local dh:Float = vh * sc
+
+		canv.SetColor 1, 1, 1
+		canv.DrawRect(x + (w - dw) / 2.0, y + (h - dh) / 2.0, dw, dh, img)
+
+	End
+
+
+	' Disegna solo una porzione del fotogramma: il "ritaglio".
+	'
+	' sx, sy, sw, sh sono in pixel del filmato (0,0 = angolo in alto a sinistra
+	' del video, non dello schermo); x, y, w, h sono il rettangolo di schermo in
+	' cui finisce il ritaglio, quindi si puo' rimpicciolire o ingrandire quanto
+	' si vuole. Il ritaglio viene riportato dentro i bordi se esce fuori.
+	'
+	'     ' il quarto centrale del filmato, ingrandito in alto a sinistra
+	'     vid.DrawPart(Canv, 10, 10, 600, 450, 256, 192, 512, 384)
+	'
+	Method DrawPart:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float, sx:Int, sy:Int, sw:Int, sh:Int)
+
+		If img = Null Then Return
+		If vw < 1 Or vh < 1 Then Return
+
+		' Un ritaglio che sborda leggerebbe pixel che non esistono, quindi lo si
+		' rimette dentro invece di lasciar disegnare spazzatura.
+		If sx < 0 Then
+			sw += sx
+			sx = 0
+		EndIf
+
+		If sy < 0 Then
+			sh += sy
+			sy = 0
+		EndIf
+
+		If sx + sw > vw Then sw = vw - sx
+		If sy + sh > vh Then sh = vh - sy
+
+		If sw < 1 Or sh < 1 Then Return
+
+		canv.SetColor 1, 1, 1
+		canv.DrawRect(x, y, w, h, img, sx, sy, sw, sh)
+
+	End
+
+
+	' Come DrawPart ma il ritaglio conserva le sue proporzioni dentro il
+	' rettangolo di destinazione, centrato (le bande restano vuote).
+	Method DrawPartFit:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float, sx:Int, sy:Int, sw:Int, sh:Int)
+
+		If img = Null Then Return
+		If vw < 1 Or vh < 1 Then Return
+
+		If sx < 0 Then
+			sw += sx
+			sx = 0
+		EndIf
+
+		If sy < 0 Then
+			sh += sy
+			sy = 0
+		EndIf
+
+		If sx + sw > vw Then sw = vw - sx
+		If sy + sh > vh Then sh = vh - sy
+
+		If sw < 1 Or sh < 1 Then Return
+
+		Local sc:Float = w / Float(sw)
+		Local sc2:Float = h / Float(sh)
+
+		If sc2 < sc Then sc = sc2
+
+		Local dw:Float = sw * sc
+		Local dh:Float = sh * sc
+
+		canv.SetColor 1, 1, 1
+		canv.DrawRect(x + (w - dw) / 2.0, y + (h - dh) / 2.0, dw, dh, img, sx, sy, sw, sh)
+
+	End
+
+
+	' Ritaglia un rettangolo di sw x sh pixel preso al centro del filmato e lo
+	' disegna nel rettangolo dato: e' il caso piu' comune, lo "zoom" centrale.
+	'
+	'     vid.DrawPartCenter(Canv, 20, 120, 400, 300, 512, 384)
+	'
+	Method DrawPartCenter:Void(canv:Canvas, x:Float, y:Float, w:Float, h:Float, sw:Int, sh:Int)
+
+		If vw < 1 Or vh < 1 Then Return
+
+		DrawPart(canv, x, y, w, h, (vw - sw) / 2, (vh - sh) / 2, sw, sh)
+
+	End
+
+
+	' Come DrawPart ma con i due rettangoli passati interi invece che come otto
+	' numeri in fila: si legge molto meglio quale e' la destinazione e quale la
+	' sorgente.
+	'
+	'     '                 RECTDEST (schermo)      RECTSRC (pixel del video)
+	'     vid.DrawRects(Canv, [20.0, 120.0, 400.0, 300.0], [256.0, 192.0, 512.0, 384.0])
+	'
+	' Se RECTSRC ha meno di 4 valori (per esempio []) si usa tutto il fotogramma.
+	Method DrawRects:Void(canv:Canvas, rectdest:Float[], rectsrc:Float[])
+
+		If img = Null Then Return
+		If vw < 1 Or vh < 1 Then Return
+		If rectdest.Length < 4 Then Return
+
+		Local sx:Int = 0
+		Local sy:Int = 0
+		Local sw:Int = vw
+		Local sh:Int = vh
+
+		If rectsrc.Length >= 4 Then
+			sx = Int(rectsrc[0])
+			sy = Int(rectsrc[1])
+			sw = Int(rectsrc[2])
+			sh = Int(rectsrc[3])
+		EndIf
+
+		DrawPart(canv, rectdest[0], rectdest[1], rectdest[2], rectdest[3], sx, sy, sw, sh)
+
+	End
+
+
+	' Stessa cosa scrivendo i numeri senza virgola: [20, 120, 400, 300] invece
+	' di [20.0, 120.0, 400.0, 300.0], che altrimenti Cerberus considera due tipi
+	' diversi di array.
+	Method DrawRects:Void(canv:Canvas, rectdest:Int[], rectsrc:Int[])
+
+		If img = Null Then Return
+		If vw < 1 Or vh < 1 Then Return
+		If rectdest.Length < 4 Then Return
+
+		Local sx:Int = 0
+		Local sy:Int = 0
+		Local sw:Int = vw
+		Local sh:Int = vh
+
+		If rectsrc.Length >= 4 Then
+			sx = rectsrc[0]
+			sy = rectsrc[1]
+			sw = rectsrc[2]
+			sh = rectsrc[3]
+		EndIf
+
+		DrawPart(canv, rectdest[0], rectdest[1], rectdest[2], rectdest[3], sx, sy, sw, sh)
+
+	End
+
+End

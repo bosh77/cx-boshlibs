@@ -1,0 +1,194 @@
+Enumerate JsTopLeft = 0, JsTopCenter = 1, JsTopRight = 2, JsMiddleLeft = 4, JsMiddleCenter = 5, JsMiddleRight = 6, JsBottomLeft = 8, JsBottomCenter = 9, JsBottomRight = 10
+
+'Class FontSize
+'
+'	Method New( width:Int,height:Int )
+'		_width=width
+'		_height=height
+'	End
+'
+'	Method Width:Int() Property
+'		Return _width
+'	End
+'	
+'	Method Height:Int() Property
+'		Return _height
+'	End
+'	
+'	Private
+'	
+'	Field _width:Int
+'	Field _height:Int
+'	
+'End
+
+
+Class FontStyle
+
+	Enumerate FW_THIN = 100
+	Enumerate FW_EXTRALIGHT = 200
+	Enumerate FW_ULTRALIGHT = 200
+	Enumerate FW_LIGHT = 300
+	Enumerate FW_NORMAL = 400
+	Enumerate FW_REGULAR = 400
+	Enumerate FW_MEDIUM = 500
+	Enumerate FW_SEMIBOLD = 600
+	Enumerate FW_DEMIBOLD = 600
+	Enumerate FW_BOLD = 700
+	Enumerate FW_EXTRABOLD = 800
+	Enumerate FW_ULTRABOLD = 800
+
+
+End
+
+
+Const COL_ALICEBLUE:Int = $F0F8FF
+Const COL_ANTIQUEWHITE:Int			= $FAEBD7
+Const COL_AQUA:Int					= $00FFFF
+Const COL_AQUAMARINE:Int				= $7FFFD4
+Const COL_AZURE:Int					= $F0FFFF
+Const COL_BEIGE:Int					= $F5F5DC
+Const COL_BISQUE:Int					= $FFE4C4
+Const COL_BLACK:Int					= $000000
+Const COL_BLANCHEDALMOND:Int			= $FFEBCD
+Const COL_BLUE:Int					= $0000FF
+Const COL_BLUEVIOLET:Int				= $8A2BE2
+Const COL_BROWN:Int					= $A52A2A
+Const COL_BURLYWOOD:Int				= $DEB887
+Const COL_CADETBLUE:Int				= $5F9EA0
+Const COL_CHARTREUSE:Int				= $7FFF00
+Const COL_CHOCOLATE:Int				= $D2691E
+Const COL_CORAL:Int					= $FF7F50
+Const COL_CORNFLOWERBLUE:Int			= $6495ED
+Const COL_CORNSILK:Int				= $FFF8DC
+Const COL_CRIMSON:Int					= $DC143C
+Const COL_CYAN:Int					= $00FFFF
+Const COL_DARKBLUE:Int				= $00008B
+Const COL_DARKCYAN:Int				= $008B8B
+Const COL_DARKGOLDENROD:Int			= $B8860B
+Const COL_DARKGRAY:Int				= $A9A9A9
+Const COL_DARKGREEN:Int				= $006400
+Const COL_DARKGREY:Int				= $A9A9A9
+Const COL_DARKKHAKI:Int				= $BDB76B
+Const COL_DARKMAGENTA:Int				= $8B008B
+Const COL_DARKOLIVEGREEN:Int			= $556B2F
+Const COL_DARKORANGE:Int				= $FF8C00
+Const COL_DARKORCHID:Int				= $9932CC
+Const COL_DARKRED:Int					= $8B0000
+Const COL_DARKSALMON:Int				= $E9967A
+Const COL_DARKSEAGREEN:Int			= $8FBC8F
+Const COL_DARKSLATEBLUE:Int			= $483D8B
+Const COL_DARKSLATEGRAY:Int			= $2F4F4F
+Const COL_DARKSLATEGREY:Int			= $2F4F4F
+Const COL_DARKTURQUOISE:Int			= $00CED1
+Const COL_DARKVIOLET:Int				= $9400D3
+Const COL_DEEPPINK:Int				= $FF1493
+Const COL_DEEPSKYBLUE:Int				= $00BFFF
+Const COL_DIMGRAY:Int					= $696969
+Const COL_DIMGREY:Int					= $696969
+Const COL_DODGERBLUE:Int				= $1E90FF
+Const COL_FIREBRICK:Int				= $B22222
+Const COL_FLORALWHITE:Int				= $FFFAF0
+Const COL_FORESTGREEN:Int				= $228B22
+Const COL_FUCHSIA:Int					= $FF00FF
+Const COL_GAINSBORO:Int				= $DCDCDC
+Const COL_GHOSTWHITE:Int				= $F8F8FF
+Const COL_GOLD:Int					= $FFD700
+Const COL_GOLDENROD:Int				= $DAA520
+Const COL_GRAY:Int					= $808080
+Const COL_GREEN:Int					= $008000
+Const COL_GREENYELLOW:Int				= $ADFF2F
+Const COL_GREY:Int					= $808080
+Const COL_HONEYDEW:Int				= $F0FFF0
+Const COL_HOTPINK:Int					= $FF69B4
+Const COL_INDIANRED:Int				= $CD5C5C
+Const COL_INDIGO:Int					= $4B0082
+Const COL_IVORY:Int					= $FFFFF0
+Const COL_KHAKI:Int					= $F0E68C
+Const COL_LAVENDER:Int				= $E6E6FA
+Const COL_LAVENDERBLUSH:Int			= $FFF0F5
+Const COL_LAWNGREEN:Int				= $7CFC00
+Const COL_LEMONCHIFFON:Int			= $FFFACD
+Const COL_LIGHTBLUE:Int				= $ADD8E6
+Const COL_LIGHTCORAL:Int				= $F08080
+Const COL_LIGHTCYAN:Int				= $E0FFFF
+Const COL_LIGHTGOLDENRODYELLOW:Int	= $FAFAD2
+Const COL_LIGHTGRAY:Int				= $D3D3D3
+Const COL_LIGHTGREEN:Int				= $90EE90
+Const COL_LIGHTGREY:Int				= $D3D3D3
+Const COL_LIGHTPINK:Int				= $FFB6C1
+Const COL_LIGHTSALMON:Int				= $FFA07A
+Const COL_LIGHTSEAGREEN:Int			= $20B2AA
+Const COL_LIGHTSKYBLUE:Int			= $87CEFA
+Const COL_LIGHTSLATEGRAY:Int			= $778899
+Const COL_LIGHTSLATEGREY:Int			= $778899
+Const COL_LIGHTSTEELBLUE:Int			= $B0C4DE
+Const COL_LIGHTYELLOW:Int				= $FFFFE0
+Const COL_LIME:Int					= $00FF00
+Const COL_LIMEGREEN:Int				= $32CD32
+Const COL_LINEN:Int					= $FAF0E6
+Const COL_MAGENTA:Int					= $FF00FF
+Const COL_MAROON:Int					= $800000
+Const COL_MEDIUMAQUAMARINE:Int		= $66CDAA
+Const COL_MEDIUMBLUE:Int				= $0000CD
+Const COL_MEDIUMORCHID:Int			= $BA55D3
+Const COL_MEDIUMPURPLE:Int			= $9370DB
+Const COL_MEDIUMSEAGREEN:Int			= $3CB371
+Const COL_MEDIUMSLATEBLUE:Int			= $7B68EE
+Const COL_MEDIUMSPRINGGREEN:Int		= $00FA9A
+Const COL_MEDIUMTURQUOISE:Int			= $48D1CC
+Const COL_MEDIUMVIOLETRED:Int			= $C71585
+Const COL_MIDNIGHTBLUE:Int			= $191970
+Const COL_MINTCREAM:Int				= $F5FFFA
+Const COL_MISTYROSE:Int				= $FFE4E1
+Const COL_MOCCASIN:Int				= $FFE4B5
+Const COL_NAVAJOWHITE:Int				= $FFDEAD
+Const COL_NAVY:Int					= $000080
+Const COL_OLDLACE:Int					= $FDF5E6
+Const COL_OLIVE:Int					= $808000
+Const COL_OLIVEDRAB:Int				= $6B8E23
+Const COL_ORANGE:Int					= $FFA500
+Const COL_ORANGERED:Int				= $FF4500
+Const COL_ORCHID:Int					= $DA70D6
+Const COL_PALEGOLDENROD:Int			= $EEE8AA
+Const COL_PALEGREEN:Int				= $98FB98
+Const COL_PALETURQUOISE:Int			= $AFEEEE
+Const COL_PALEVIOLETRED:Int			= $DB7093
+Const COL_PAPAYAWHIP:Int				= $FFEFD5
+Const COL_PEACHPUFF:Int				= $FFDAB9
+Const COL_PERU:Int					= $CD853F
+Const COL_PINK:Int					= $FFC0CB
+Const COL_PLUM:Int					= $DDA0DD
+Const COL_POWDERBLUE:Int				= $B0E0E6
+Const COL_PURPLE:Int					= $800080
+Const COL_REBECCAPURPLE:Int			= $663399
+Const COL_RED:Int						= $FF0000
+Const COL_ROSYBROWN:Int				= $BC8F8F
+Const COL_ROYALBLUE:Int				= $4169E1
+Const COL_SADDLEBROWN:Int				= $8B4513
+Const COL_SALMON:Int					= $FA8072
+Const COL_SANDYBROWN:Int				= $F4A460
+Const COL_SEAGREEN:Int				= $2E8B57
+Const COL_SEASHELL:Int				= $FFF5EE
+Const COL_SIENNA:Int					= $A0522D
+Const COL_SILVER:Int					= $C0C0C0
+Const COL_SKYBLUE:Int					= $87CEEB
+Const COL_SLATEBLUE:Int				= $6A5ACD
+Const COL_SLATEGRAY:Int				= $708090
+Const COL_SLATEGREY:Int				= $708090
+Const COL_SNOW:Int					= $FFFAFA
+Const COL_SPRINGGREEN:Int				= $00FF7F
+Const COL_STEELBLUE:Int				= $4682B4
+Const COL_TAN:Int						= $D2B48C
+Const COL_TEAL:Int					= $008080
+Const COL_THISTLE:Int					= $D8BFD8
+Const COL_TOMATO:Int					= $FF6347
+Const COL_TURQUOISE:Int				= $40E0D0
+Const COL_VIOLET:Int					= $EE82EE
+Const COL_WHEAT:Int					= $F5DEB3
+Const COL_WHITE:Int					= $FFFFFF
+Const COL_WHITESMOKE:Int				= $F5F5F5
+Const COL_YELLOW:Int					= $FFFF00
+Const COL_YELLOWGREEN:Int = $9ACD32
+
+

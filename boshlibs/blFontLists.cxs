@@ -1,0 +1,375 @@
+
+' blFontList - scrollable list of available fonts, each name written with its
+' own font, like Windows' "Select Font" window.
+'
+' You scroll by dragging with the mouse or a finger (on Android the touch
+' arrives as a mouse, so the code is the same), or with the wheel. On
+' release the list continues by inertia. A touch without dragging selects
+' the row.
+'
+' Typical usage:
+'
+'     Field fl:blFontList
+'
+'     ' in OnCreate
+'     fl = New blFontList(30)
+'
+'     ' in OnUpdate
+'     fl.SetView(20, 100, DeviceWidth() - 40, DeviceHeight() - 120)
+'     fl.Update()
+'
+'     ' in OnRender
+'     fl.Draw(Canv)
+'
+' For each font the FULL alphabet is NOT built: only its name written once
+' is needed, and blFont.TextImage draws exactly that. The difference is not
+' small - a 40pt font's atlas is over a megabyte and a half of texture, its
+' name alone a few dozen kilobytes - and it's the reason this list can keep
+' all the rows in memory instead of continuously throwing them away and
+' rebuilding them.
+
+Import mojo2
+Import boshlibs.blFonts
+
+' Input is NOT read here: blFuncs.ReadTouch() reads it, once per loop.
+' Whoever uses this list must call it in OnUpdate before fl.Update().
+Import boshlibs.blFuncs
+
+
+Class blFontList
+
+	' How many texts to build at most in one loop. They're small images,
+	' but creating them all together on the first frame would show as a pause.
+	Const BUILD_PER_FRAME:Int = 6
+
+	Field names:String[]
+	Field imgs:Image[]
+	Field tried:Bool[]
+
+	Field fontsize:Int
+	Field rowh:Float
+
+	Field vx:Float
+	Field vy:Float
+	Field vw:Float
+	Field vh:Float
+
+	Field scroll:Float
+	Field vel:Float
+	Field maxscroll:Float
+
+	Field dragging:Bool
+	Field wasdown:Bool
+	Field lasty:Float
+	Field starty:Float
+	Field moved:Float
+
+	Field sel:Int
+
+
+	Method New(size:Int = 30)
+
+		fontsize = size
+
+		If fontsize < 8 Then fontsize = 8
+
+		rowh = fontsize * 1.7
+		sel = -1
+
+		#If NATIVEFONTSON
+		names = blFont.GetFontList()
+		#Else
+		names = New String[0]
+		#EndIf
+
+		' the native list ends with ';', so the last entry is empty
+		Local n:Int = names.Length
+
+		While n > 0 And names[n - 1].Trim() = ""
+			n -= 1
+		Wend
+
+		If n <> names.Length Then names = names.Resize(n)
+
+		imgs = New Image[names.Length]
+		tried = New Bool[names.Length]
+
+		vw = 100
+		vh = 100
+
+	End
+
+
+	' The rectangle the list lives in. Both Update and Draw use it, so
+	' the touched point and the drawn row can't disagree.
+	Method SetView:Void(x:Float, y:Float, w:Float, h:Float)
+
+		vx = x
+		vy = y
+		vw = w
+		vh = h
+
+	End
+
+
+	Method Count:Int()
+
+		Return names.Length
+
+	End
+
+
+	' How many rows have been drawn at least once: only for curiosity,
+	' not for functioning.
+	Method Built:Int()
+
+		Local k:Int = 0
+
+		For Local i:Int = 0 Until imgs.Length
+			If imgs[i] <> Null Then k += 1
+		Next
+
+		Return k
+
+	End
+
+
+	Method Selected:Int()
+
+		Return sel
+
+	End
+
+
+	Method SelectedName:String()
+
+		If sel < 0 Or sel >= names.Length Then Return ""
+
+		Return names[sel]
+
+	End
+
+
+	' Throws away all the ready texts. Only call if the list is no longer
+	' needed: otherwise they rebuild themselves at the first Update, but uselessly.
+	Method Free:Void()
+
+		For Local i:Int = 0 Until imgs.Length
+
+			If imgs[i] <> Null Then imgs[i].Discard()
+
+			imgs[i] = Null
+			tried[i] = False
+
+		Next
+
+	End
+
+
+	' First visible row (may be partially off the top).
+	Method FirstVisible:Int()
+
+		Local i:Int = Int(scroll / rowh)
+
+		If i < 0 Then i = 0
+
+		Return i
+
+	End
+
+
+	Method LastVisible:Int()
+
+		Local i:Int = Int((scroll + vh) / rowh)
+
+		If i > names.Length - 1 Then i = names.Length - 1
+
+		Return i
+
+	End
+
+
+	Method Update:Void()
+
+		maxscroll = names.Length * rowh - vh
+
+		If maxscroll < 0 Then maxscroll = 0
+
+		' Values already read by ReadTouch(). Reading MouseZ() here would be
+		' a mess: it resets as soon as it's read, so the wheel would end up
+		' with whoever reads first and the other would never see it.
+		Local wheel:Float = zmou
+
+		Local mx:Float = xmou
+		Local my:Float = ymou
+		Local down:Bool = (ispre <> 0)
+
+		Local inside:Bool = (mx >= vx And mx < vx + vw And my >= vy And my < vy + vh)
+
+		If wheel <> 0 And inside Then
+			scroll -= wheel * rowh * 3.0
+			vel = 0
+		EndIf
+
+		If down And Not wasdown And inside Then
+			dragging = True
+			lasty = my
+			starty = my
+			moved = 0
+			vel = 0
+		EndIf
+
+		If dragging Then
+
+			If down Then
+
+				Local d:Float = my - lasty
+
+				scroll -= d
+				vel = -d
+				lasty = my
+				moved += Abs(d)
+
+			Else
+
+				dragging = False
+
+				' a still touch is a selection, a drag is not
+				If moved < rowh * 0.3 Then
+
+					Local i:Int = Int((scroll + (starty - vy)) / rowh)
+
+					If i >= 0 And i < names.Length Then sel = i
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+		If Not dragging Then
+
+			scroll += vel
+			vel *= 0.90
+
+			If Abs(vel) < 0.3 Then vel = 0
+
+		EndIf
+
+		If scroll < 0 Then
+			scroll = 0
+			vel = 0
+		EndIf
+
+		If scroll > maxscroll Then
+			scroll = maxscroll
+			vel = 0
+		EndIf
+
+		wasdown = down
+
+		Cache()
+
+	End
+
+
+	' Prepares the visible rows' texts, a few at a time. None are thrown
+	' away: they cost so little that keeping them is cheaper than rebuilding
+	' them every time you scroll back and forth.
+	Method Cache:Void()
+
+		#If NATIVEFONTSON
+
+		If names.Length = 0 Then Return
+
+		Local budget:Int = BUILD_PER_FRAME
+		Local b:Int = LastVisible()
+
+		For Local i:Int = FirstVisible() To b
+
+			If budget <= 0 Then Return
+
+			If imgs[i] <> Null Or tried[i] Then Continue
+
+			tried[i] = True
+			imgs[i] = blFont.TextImage(names[i], fontsize, names[i], 0)
+
+			budget -= 1
+
+		Next
+
+		#EndIf
+
+	End
+
+
+	Method Draw:Void(canv:Canvas)
+
+		canv.SetColor $FFFFFF
+		canv.DrawRect(vx, vy, vw, vh)
+
+		' The four values must be COPIED, not kept by reference:
+		' Canvas.Scissor returns mojo2's internal array, and SetScissor
+		' writes into that same array. Keeping the array, after the
+		' SetScissor below it would already contain the new values and the
+		' "restore" at the end would put back the list rectangle: from there
+		' on the rest of the frame would be clipped away, and whoever
+		' draws something AFTER the list wouldn't see it appear.
+		Local scx:Int = canv.Scissor[0]
+		Local scy:Int = canv.Scissor[1]
+		Local scw:Int = canv.Scissor[2]
+		Local sch:Int = canv.Scissor[3]
+
+		canv.SetScissor(Int(vx), Int(vy), Int(vw), Int(vh))
+
+		Local a:Int = FirstVisible()
+		Local b:Int = LastVisible()
+
+		For Local i:Int = a To b
+
+			Local ry:Float = vy + i * rowh - scroll
+
+			If i = sel Then
+				canv.SetColor $CFE4FF
+				canv.DrawRect(vx, ry, vw, rowh)
+			EndIf
+
+			canv.SetColor $E6E6E6
+			canv.DrawRect(vx, ry + rowh - 1, vw, 1)
+
+			Local im:Image = imgs[i]
+
+			If im <> Null Then
+
+				canv.SetColor $202020
+				canv.DrawRect(vx + 8, ry + (rowh - im.Height) / 2.0, im.Width, im.Height, im)
+
+			Else
+
+				' not ready yet: meanwhile the name with mojo's font
+				canv.SetColor $909090
+				canv.DrawText(names[i], vx + 14, ry + rowh / 2.0, 0, 0.5)
+
+			EndIf
+
+		Next
+
+		canv.SetScissor(scx, scy, scw, sch)
+
+		' scroll indicator on the right edge
+		If maxscroll > 0 Then
+
+			Local th:Float = vh * (vh / (names.Length * rowh))
+
+			If th < 30 Then th = 30
+
+			Local ty:Float = vy + (vh - th) * (scroll / maxscroll)
+
+			canv.SetColor $C8C8C8
+			canv.DrawRect(vx + vw - 8, ty, 5, th)
+
+		EndIf
+
+	End
+
+End

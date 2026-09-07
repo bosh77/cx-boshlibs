@@ -1,0 +1,671 @@
+
+' blHttpRequests - HTTP and HTTPS requests, GET and POST, without blocking the game.
+'
+'     Field req:blHttpRequest
+'
+'     ' a GET
+'     req = New blHttpRequest("GET", "https://www.mysite.com/test.php")
+'     req.Send()
+'
+'     ' a POST with some text
+'     req = New blHttpRequest("POST", "https://www.mysite.com/test.php")
+'     req.Send("hello world")
+'
+'     ' a POST with raw bytes
+'     req.Send(data)                          ' data:Int[], one byte per element
+'
+'     ' in OnUpdate
+'     blHttpRequest.UpdateAll()
+'
+'     If req.Done() Then Print req.ResponseText()
+'
+' The request starts on a thread and NEVER blocks: you poll it whenever
+' you want. `UpdateAll()` in OnUpdate just fires the completion callback
+' (`IOnBlHttpRequestComplete`); those who prefer to look at `Done()`
+' on their own can skip calling it.
+'
+' The module does NOT use brl.httprequest or brl.asyncevent: the natives
+' are its own, in native/, one per platform, and it handles the event
+' loop by itself. The only thing it takes from the installation is
+' `brl.thread`, which is the runtime thread primitive - like DataBuffer -
+' not a module that does the work for us; it exists on all targets,
+' Android included.
+'
+' Platforms: glfw (Windows, Linux, macOS - libcurl, which is already inside
+' every glfw3 build like tinyfiledialogs, so it's not a new dependency),
+' Android (HttpURLConnection), html5 (XMLHttpRequest) and iOS (NSURLSession).
+'
+' WARNING on Windows with MinGW: the curl static library that Cerberus
+' ships is compiled for MSVC. With `#GLFW_USE_MINGW=True` it switches to
+' the DLL (`-lcurldll`), which the builder copies next to the executable.
+'
+' CX modules by bosh77
+
+
+' Only the thread primitive: the glfw, Android and iOS natives run on top
+' of it. It's not brl.httprequest, which is the module we want to NOT use.
+Import brl.thread
+Import brl.databuffer
+
+' Only needed by ToImage(), which delivers the response as a mojo2 Image.
+Import mojo2
+
+
+#If TARGET="android"
+
+#BLHTTPON=1
+
+Import "native/blHttpRequests-android.java"
+
+#EndIf
+
+
+#If TARGET="glfw"
+
+#BLHTTPON=1
+
+Import "native/blHttpRequests-glfw.cpp"
+
+' The same settings that brl.httprequest declares: the static curl .lib
+' is already in the target's MSVC project, but with MinGW and on Linux the
+' linker must be told, and the DLLs must be copied next to the executable.
+#GLFW_COPY_LIBS+="libcurl-x64"
+#GLFW_COPY_LIBS+="libcurl"
+#GLFW_COPY_LIBS+="libcrypto-1_1-x64"
+#GLFW_COPY_LIBS+="libssl-1_1-x64"
+
+#GLFW_COPY_LIBS_32+="libcurl"
+#GLFW_COPY_LIBS_32+="libcrypto-1_1"
+#GLFW_COPY_LIBS_32+="libssl-1_1"
+
+#If HOST="linux"
+#GLFW_GCC_LIB_OPTS+="-lcurl"
+#EndIf
+
+#If HOST="winnt"
+#GLFW_GCC_LIB_OPTS+="-lcurldll"
+#EndIf
+
+#EndIf
+
+
+#If TARGET="html5"
+
+#BLHTTPON=1
+
+Import "native/blHttpRequests-html5.js"
+
+#EndIf
+
+
+#If TARGET="ios"
+
+#BLHTTPON=1
+
+Import "native/blHttpRequests-ios.cpp"
+
+#EndIf
+
+
+' The network permission is declared by the module, not the app. The sentinel
+' avoids writing it twice when blNet is also present in the same program.
+#If TARGET="android" And Not BL_PERMISSION_INTERNET
+
+#ANDROID_MANIFEST_MAIN+="<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_MANIFEST_MAIN+="<uses-permission android:name=~qandroid.permission.ACCESS_NETWORK_STATE~q />"
+
+#BL_PERMISSION_INTERNET=True
+
+#EndIf
+
+
+#If BLHTTPON
+
+Extern Private
+
+' On every platform the native is a class with the same methods: the
+' differences between the systems are normalized inside the native, not
+' here with #If blocks. The timeout is in seconds and applies everywhere,
+' even where the code it started from didn't pass it.
+Class BBblHttpRequest
+
+	Method Open:Void(verb:String, url:String, timeout:Int, verifycert:Bool, verifyhost:Bool)
+	Method SetHeader:Void(name:String, value:String)
+	Method Send:Void()
+	Method SendText:Void(data:String, encoding:String)
+	Method SendBytes:Void(data:Int[], ln:Int)
+	Method ResponseText:String()
+	Method ResponseBytes:Int[]()
+	Method Status:Int()
+	Method BytesReceived:Int()
+	Method BytesSending:Int()
+	Method IsRunning:Bool()
+
+	Method WantImage:Void(on:Bool)
+	Method ImageWidth:Int()
+	Method ImageHeight:Int()
+	Method ImagePixels:Int(db:DataBuffer)
+
+End
+
+Public
+
+#EndIf
+
+
+' The state of a request.
+Const BLHTTP_OPEN:Int = 0
+Const BLHTTP_SENDING:Int = 1
+Const BLHTTP_DONE:Int = 2
+
+
+' Whoever wants to be notified instead of checking Done() every loop.
+Interface IOnBlHttpRequestComplete
+
+	Method OnBlHttpRequestComplete:Void(req:blHttpRequest)
+
+End
+
+
+' The only place where the platform is checked: from here down the public
+' class doesn't even have a #If.
+
+Private
+
+Class blHttpNative
+
+	#If BLHTTPON
+	Field r:BBblHttpRequest
+	#EndIf
+
+	Method Open:Bool(verb:String, url:String, timeout:Int, verifycert:Bool, verifyhost:Bool)
+		#If BLHTTPON
+		r = New BBblHttpRequest
+		r.Open(verb, url, timeout, verifycert, verifyhost)
+		Return True
+		#Else
+		Return False
+		#EndIf
+	End
+
+	Method SetHeader:Void(name:String, value:String)
+		#If BLHTTPON
+		If r <> Null Then r.SetHeader(name, value)
+		#EndIf
+	End
+
+	Method Send:Void()
+		#If BLHTTPON
+		If r <> Null Then r.Send()
+		#EndIf
+	End
+
+	Method SendText:Void(data:String, encoding:String)
+		#If BLHTTPON
+		If r <> Null Then r.SendText(data, encoding)
+		#EndIf
+	End
+
+	Method SendBytes:Void(data:Int[])
+		#If BLHTTPON
+		If r <> Null Then r.SendBytes(data, data.Length)
+		#EndIf
+	End
+
+	Method ResponseText:String()
+		#If BLHTTPON
+		If r <> Null Then Return r.ResponseText()
+		#EndIf
+		Return ""
+	End
+
+	Method ResponseBytes:Int[]()
+		#If BLHTTPON
+		If r <> Null Then Return r.ResponseBytes()
+		#EndIf
+		Return New Int[0]
+	End
+
+	Method Status:Int()
+		#If BLHTTPON
+		If r <> Null Then Return r.Status()
+		#EndIf
+		Return -1
+	End
+
+	Method BytesReceived:Int()
+		#If BLHTTPON
+		If r <> Null Then Return r.BytesReceived()
+		#EndIf
+		Return 0
+	End
+
+	Method BytesSending:Int()
+		#If BLHTTPON
+		If r <> Null Then Return r.BytesSending()
+		#EndIf
+		Return 0
+	End
+
+	Method IsRunning:Bool()
+		#If BLHTTPON
+		If r <> Null Then Return r.IsRunning()
+		#EndIf
+		Return False
+	End
+
+	Method WantImage:Void(on:Bool)
+		#If BLHTTPON
+		If r <> Null Then r.WantImage(on)
+		#EndIf
+	End
+
+	Method ImageWidth:Int()
+		#If BLHTTPON
+		If r <> Null Then Return r.ImageWidth()
+		#EndIf
+		Return 0
+	End
+
+	Method ImageHeight:Int()
+		#If BLHTTPON
+		If r <> Null Then Return r.ImageHeight()
+		#EndIf
+		Return 0
+	End
+
+	Method ImagePixels:Int(db:DataBuffer)
+		#If BLHTTPON
+		If r <> Null Then Return r.ImagePixels(db)
+		#EndIf
+		Return 0
+	End
+
+End
+
+Public
+
+
+Class blHttpRequest
+
+	' All requests still in flight. Used by UpdateAll() and the count.
+	Global live:List<blHttpRequest> = New List<blHttpRequest>
+
+
+	' Is the server certificate checked? YES.
+	'
+	' brl.httprequest and the code this module comes from kept it OFF,
+	' i.e. they accepted any certificate: with https that meant encrypted
+	' traffic but to anyone who got in the middle.
+	'
+	' Here it's on because it really works on all platforms, and it was
+	' verified: the curl Cerberus ships on Windows uses schannel, so it
+	' relies on Windows' certificate list; on Linux it uses the system one;
+	' on Android and iOS the check is done by the OS and can't even be
+	' turned off.
+	'
+	' It's only turned off to talk to a test server with a home-made
+	' certificate, and knowing what you're doing.
+	Global verifycert:Bool = True
+	Global verifyhost:Bool = True
+
+	' Seconds before giving up. Zero = whatever the system decides.
+	Global timeout:Int = 30
+
+	' The name the app presents to the server. It must be set on each new
+	' request, so changing it applies to the next ones, not to those
+	' already in flight.
+	'
+	' It's NOT a detail: the OpenStreetMap tile service REQUIRES a
+	' User-Agent that identifies the application and blocks anyone who
+	' comes with the generic one of a library. Put the real name of your
+	' app and a contact:
+	'
+	'     blHttpRequest.SetUserAgent("SweetHome/2.6 (info@mysite.com)")
+	'
+	Global useragent:String = "boshlibs/1.0 (Cerberus X)"
+
+
+	Function SetUserAgent:Void(ua:String)
+
+		useragent = ua
+
+	End
+
+
+	Field onComplete:IOnBlHttpRequestComplete
+
+	Field verb:String
+	Field url:String
+
+	Field state:Int
+
+	' The completion callback fires only once.
+	Field notified:Bool
+
+	Field nat:blHttpNative
+
+	' The Image built by ToImage(), held so it's not rebuilt every loop.
+	Field img:Image
+
+
+	' verb is "GET", "POST", "PUT"... url is complete with http:// or https://.
+	Method New(v:String, u:String, oncomp:IOnBlHttpRequestComplete = Null)
+
+		verb = v.ToUpper()
+		url = u
+		onComplete = oncomp
+
+		nat = New blHttpNative
+
+		nat.Open(verb, url, timeout, verifycert, verifyhost)
+
+		If useragent.Length > 0 Then nat.SetHeader("User-Agent", useragent)
+
+		state = BLHTTP_OPEN
+
+	End
+
+
+	' Call BEFORE Send. "Content-Type" is already set by Send itself.
+	Method SetHeader:Void(name:String, value:String)
+
+		nat.SetHeader(name, value)
+
+	End
+
+
+	' Sends the request without a body: the GET case.
+	Method Send:Void()
+
+		Start()
+
+		nat.Send()
+
+	End
+
+
+	' Sends some text. The content type is a classic web module one;
+	' passing "" lets the server decide.
+	Method Send:Void(data:String, mimetype:String = "text/plain;charset=UTF-8", encoding:String = "utf8")
+
+		If mimetype.Length > 0 Then nat.SetHeader("Content-Type", mimetype)
+
+		Start()
+
+		nat.SendText(data, encoding)
+
+	End
+
+
+	' Sends raw bytes: one element of the array = one byte (only the low
+	' eight bits are looked at). It's the way to send a file or binary data
+	' without going through a string.
+	Method Send:Void(data:Int[], mimetype:String = "application/octet-stream")
+
+		If mimetype.Length > 0 Then nat.SetHeader("Content-Type", mimetype)
+
+		Start()
+
+		nat.SendBytes(data)
+
+	End
+
+
+	Method IsRunning:Bool()
+
+		Poll()
+
+		Return state = BLHTTP_SENDING
+
+	End
+
+
+	' Finished, for better or worse. Read the code with Status().
+	Method Done:Bool()
+
+		Poll()
+
+		Return state = BLHTTP_DONE
+
+	End
+
+
+	' Finished badly: no network, wrong address, or the server replied
+	' with an error code.
+	Method Failed:Bool()
+
+		If Not Done() Then Return False
+
+		Local s:Int = nat.Status()
+
+		Return s < 200 Or s >= 400
+
+	End
+
+
+	' The HTTP code: 200 if it went well, 404, 500... -1 if the request
+	' didn't even start.
+	Method Status:Int()
+
+		Poll()
+
+		Return nat.Status()
+
+	End
+
+
+	' The response body as text (read as UTF-8).
+	Method ResponseText:String()
+
+		If Not Done() Then Return ""
+
+		Return nat.ResponseText()
+
+	End
+
+
+	' The response body byte by byte, one byte per element (0-255).
+	Method ResponseBytes:Int[]()
+
+		If Not Done() Then Return New Int[0]
+
+		Return nat.ResponseBytes()
+
+	End
+
+
+	' How many bytes have arrived so far: you can look at it while it
+	' downloads, and it's what you need for a progress bar.
+	Method BytesReceived:Int()
+
+		Return nat.BytesReceived()
+
+	End
+
+
+	' How many bytes have already gone out. Useful when sending big stuff.
+	Method BytesSending:Int()
+
+		Return nat.BytesSending()
+
+	End
+
+
+	' Call BEFORE Send: the response will be decoded as an image
+	' on the background thread, and ToImage() will deliver it as a mojo2 Image.
+	'
+	' Decoding there and not on the drawing thread is the whole point: it's
+	' how a tile map doesn't drop a frame when one arrives.
+	'
+	' By requesting an image the body is NOT also kept as text and as a
+	' byte array: for a tile that would be hundreds of kilobytes thrown
+	' away right after. ResponseText() returns empty.
+	Method WantImage:Void()
+
+		nat.WantImage(True)
+
+	End
+
+
+	' The response as a mojo2 Image, created the first time it's asked for
+	' and then kept. Null if not ready, if it wasn't an image, or if on this
+	' platform the decode isn't available (iOS).
+	'
+	' Must be called from the drawing thread, like anything that touches a
+	' texture.
+	Method ToImage:Image()
+
+		If img <> Null Then Return img
+
+		If Not Done() Then Return Null
+
+		Local w:Int = nat.ImageWidth()
+		Local h:Int = nat.ImageHeight()
+
+		If w < 1 Or h < 1 Then Return Null
+
+		Local db:DataBuffer = New DataBuffer(w * h * 4)
+
+		If nat.ImagePixels(db) = 0 Then
+
+			db.Discard()
+			Return Null
+
+		EndIf
+
+		img = New Image(w, h, 0, 0)
+		img.WritePixels(0, 0, w, h, db)
+
+		db.Discard()
+
+		Return img
+
+	End
+
+
+	Method ImageWidth:Int()
+
+		Return nat.ImageWidth()
+
+	End
+
+
+	Method ImageHeight:Int()
+
+		Return nat.ImageHeight()
+
+	End
+
+
+	' Call in OnUpdate. Fires the callbacks of the finished requests and
+	' removes the finished ones.
+	'
+	' Those who check Done() on their own can skip it: the state updates
+	' anyway at every poll. It's only needed for the callbacks, which
+	' otherwise would have no one to fire them.
+	Function UpdateAll:Void()
+
+		If live.IsEmpty() Then Return
+
+		' Two passes: first you see who finished, then you remove. Deleting
+		' while iterating the list isn't safe, and on top of that the app's
+		' callback could start other requests.
+		Local finite:Stack<blHttpRequest> = New Stack<blHttpRequest>
+
+		For Local r:blHttpRequest = Eachin live
+
+			r.Poll()
+
+			If r.state = BLHTTP_DONE Then finite.Push(r)
+
+		Next
+
+		For Local r:blHttpRequest = Eachin finite
+
+			live.Remove(r)
+
+			If r.onComplete <> Null And Not r.notified Then
+
+				r.notified = True
+
+				r.onComplete.OnBlHttpRequestComplete(r)
+
+			EndIf
+
+		Next
+
+	End
+
+
+	' How many requests are in flight now.
+	Function Running:Int()
+
+		Return live.Count()
+
+	End
+
+
+	' False where there's no native: the app can say so instead of waiting
+	' for a response that will never come.
+	Function Available:Bool()
+
+		#If BLHTTPON
+		Return True
+		#Else
+		Return False
+		#EndIf
+
+	End
+
+
+	' Removes the request from the live list. The native finishes on its own
+	' the work it already started: stopping a thread halfway is worse.
+	Method Discard:Void()
+
+		live.Remove(Self)
+
+		notified = True
+
+	End
+
+
+	Private
+
+	Method Start:Void()
+
+		#If BLHTTPON
+
+		state = BLHTTP_SENDING
+		notified = False
+
+		live.AddLast(Self)
+
+		#Else
+
+		' No native: the request is already finished, and badly. Better that
+		' than leaving the app waiting forever.
+		state = BLHTTP_DONE
+		notified = False
+
+		live.AddLast(Self)
+
+		#EndIf
+
+	End
+
+
+	' The native notifies no one when it's done: it's the thread that stops.
+	' Here you check if it's still running, and it's the only place the state
+	' changes.
+	Method Poll:Void()
+
+		If state <> BLHTTP_SENDING Then Return
+
+		If nat.IsRunning() Then Return
+
+		state = BLHTTP_DONE
+
+	End
+
+End

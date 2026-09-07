@@ -1,0 +1,23 @@
+
+' boshlibs - single module. Import boshlibs pulls in everything.
+'
+' The common native helpers (native/boshlib.cpp) are imported by blFonts, which
+' must emit them before its own .cpp: importing them here too would duplicate them.
+
+' First the basics (constants and utilities), which depend on nothing.
+Import blConsts
+Import blFuncs
+
+Import blControls
+Import blFonts
+Import blFontLists
+Import blGPS
+Import blHttpRequests
+Import blKeyboards
+Import blMaps
+Import blMenus
+Import blPrinter
+Import blRequesters
+' blOs does NOT go under the umbrella: it imports brl.filesystem, which does
+' not exist on html5. Whoever needs it imports it explicitly with Import boshlibs.blOs.
+Import blVideos
