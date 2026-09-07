@@ -1,0 +1,297 @@
+'
+' controls-example.cxs  --  example 7 of the "boshlibs" module
+'
+' Buttons, checkboxes, dropdown menus and text fields, all
+' drawn with mojo2: they live INSIDE the canvas, so they scale and
+' move like anything else, and they are identical on every platform
+' without a single line of native code.
+'
+' The three calls are always the same:
+'
+'     ReadTouch()      first, in OnUpdate
+'     pan.Update()     right after
+'     pan.Draw(cv)     in OnRender
+'
+' Events are read only once: Clicked() on buttons, Toggled()
+' on checkboxes, Changed() on dropdowns.
+'
+' On Android the text field opens the native blKeyboards keyboard, the one
+' with autocorrect and suggestions; on desktop it reads the keys from blFuncs.
+'
+' CX modules by bosh77
+'
+
+' Needed by the text field: on Android it pulls in the native keyboard.
+#NATIVEFONTSON = 1
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - controls"
+#GLFW_WINDOW_WIDTH = 760
+#GLFW_WINDOW_HEIGHT = 520
+#GLFW_WINDOW_RESIZABLE = True
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blcontrols"
+#ANDROID_APP_LABEL="boshlibs blcontrols"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App7()
+
+End
+
+
+Class App7 Extends App
+
+	Const BASE_H:Float = 520.0
+	Const ZOOM:Float = 3.0
+
+	Field cv:Canvas
+
+	Field pan:blPanel
+
+	' --- the controls
+	Field btOk:blButton
+	Field btCancel:blButton
+	Field btOff:blButton
+
+	Field ckGrid:blCheckbox
+	Field ckSounds:blCheckbox
+
+	Field ddColor:blDropdown
+	Field ddQuality:blDropdown
+
+	Field tfName:blTextfield
+
+	' --- state driven by the controls
+	Field grid:Bool = True
+	Field sounds:Bool
+
+	Field msg:String = "press something"
+
+	Field color:Int = COL_CORNFLOWERBLUE
+
+
+	Method K:Float()
+
+		Local k:Float = DeviceHeight() / BASE_H
+
+		If k > ZOOM Then k = ZOOM
+		If k < 1 Then k = 1
+
+		Return k
+
+	End
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(760, 520, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+		' A single place to fit all the controls to the screen.
+		blControlsTheme.scale = K()
+
+		Build()
+
+	End
+
+
+	Method Build:Void()
+
+		Local k:Float = K()
+
+		pan = New blPanel()
+
+		Local x1:Float = 24 * k
+		Local x2:Float = 400 * k
+
+		Local bw:Float = 160 * k
+		Local bh:Float = 40 * k
+
+		Local y:Float = 76 * k
+		Local steps:Float = 52 * k
+
+		' --- buttons
+		btOk = pan.AddButton(x1, y, bw, bh, "OK")
+		btCancel = pan.AddButton(x1 + bw + 12 * k, y, bw, bh, "Cancel")
+
+		y = y + steps
+
+		' a disabled button, to show the disabled state
+		btOff = pan.AddButton(x1, y, bw, bh, "Off")
+		btOff.enabled = False
+
+		y = y + steps + 8 * k
+
+		' --- checkboxes
+		ckGrid = pan.AddCheckbox(x1, y, 330 * k, bh, "Show the grid", grid)
+
+		y = y + steps
+
+		ckSounds = pan.AddCheckbox(x1, y, 330 * k, bh, "Sounds on", sounds)
+
+		' --- dropdown menus
+		Local yd:Float = 76 * k
+
+		ddColor = pan.AddDropdown(x2, yd, 240 * k, bh, ["Light blue", "Green", "Orange", "Red"], 0)
+
+		yd = yd + steps + 8 * k
+
+		ddQuality = pan.AddDropdown(x2, yd, 240 * k, bh, ["Low", "Medium", "High"], 1)
+
+		' --- text field
+		yd = yd + steps + 8 * k
+
+		tfName = pan.AddTextfield(x2, yd, 240 * k, bh, "", "type here...")
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		' Always first: it is the only one that reads the mouse and the keys.
+		ReadTouch()
+
+		pan.Update()
+
+		' --- the events, each one read only once
+
+		If btOk.Clicked() Then msg = "OK pressed"
+		If btCancel.Clicked() Then msg = "Cancel pressed"
+
+		If ckGrid.Toggled() Then
+
+			grid = ckGrid.checked
+
+			If grid Then msg = "grid on" Else msg = "grid off"
+
+		EndIf
+
+		If ckSounds.Toggled() Then
+
+			sounds = ckSounds.checked
+
+			If sounds Then msg = "sounds on" Else msg = "sounds off"
+
+		EndIf
+
+		If ddColor.Changed() Then
+
+			Select ddColor.Selected()
+				Case 0
+					color = COL_CORNFLOWERBLUE
+				Case 1
+					color = COL_MEDIUMSEAGREEN
+				Case 2
+					color = COL_ORANGE
+				Default
+					color = COL_TOMATO
+			End
+
+			msg = "color: " + ddColor.SelectedText()
+
+		EndIf
+
+		If ddQuality.Changed() Then msg = "quality: " + ddQuality.SelectedText()
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		' The full-screen scissor BEFORE the Clear: Clear fills only the area
+		' of the current scissor, and if it was left narrowed by a previous
+		' drawing the old frame stays on screen and you get flickering.
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.10, 0.11, 0.13
+
+		Local k:Float = K()
+
+		' the grid, switched on and off by the checkbox
+		If grid Then
+
+			cv.SetColor COL_DARKSLATEGRAY
+
+			Local steps:Float = 40 * k
+
+			For Local i:Int = 0 To Int(DeviceWidth() / steps)
+				cv.DrawRect(i * steps, 0, k, DeviceHeight())
+			Next
+
+			For Local i:Int = 0 To Int(DeviceHeight() / steps)
+				cv.DrawRect(0, i * steps, DeviceWidth(), k)
+			Next
+
+		EndIf
+
+		' --- header
+
+		cv.SetColor COL_WHITE
+		Txt("BOSHLIBS - CONTROLS", 24 * k, 20 * k)
+
+		cv.SetColor color
+		Txt(msg, 24 * k, 44 * k)
+
+		' --- the controls. Open dropdowns are drawn last by the panel,
+		'     so they end up on top of everything else.
+		pan.Draw(cv)
+
+		' --- what the text field collected
+		If tfName.Text().Length > 0 Then
+
+			cv.SetColor COL_SILVER
+			Txt("hello " + tfName.Text(), 400 * k, DeviceHeight() - 60 * k)
+
+		EndIf
+
+		cv.Flush
+
+	End
+
+
+	Method Txt:Void(s:String, x:Float, y:Float)
+
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(x, y)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0)
+		cv.PopMatrix()
+
+	End
+
+End

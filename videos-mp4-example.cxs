@@ -1,0 +1,379 @@
+'
+' videos-mp4-example.cxs  --  example 6 of the "boshlibs" module
+'
+' Playing an .mp4 inside a mojo2 Image.
+'
+' The movie is NOT a system view overlaid on the game: it is a normal
+' Image, so it is drawn on the Canvas like any other image. You scale it,
+' put it in a layout box, crop a piece out of it, and you can
+' draw on top of it.
+'
+' The three calls are:
+'     vid = New blVideo("cerberus://data/run_1.mp4")   in OnCreate
+'     vid.Update()                                     in OnUpdate
+'     vid.Draw... (canvas, ...)                        in OnRender
+'
+' Here you see the four ways to draw it, all from the same frame:
+' full distorted, with the aspect preserved, a zoom on the center, and the
+' form with the two explicit rectangles.
+'
+' Commands:
+'     on-screen buttons for play / pause and for loop
+'
+' Windows uses Media Foundation, Android uses MediaCodec. On macOS, Linux, iOS
+' and html5 there is still no native: the example starts anyway and the boxes
+' stay empty, without needing to change a single line.
+'
+' CX modules by bosh77
+'
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - mp4 video"
+#GLFW_WINDOW_WIDTH = 760
+#GLFW_WINDOW_HEIGHT = 520
+#GLFW_WINDOW_RESIZABLE = True
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blvideos"
+#ANDROID_APP_LABEL="boshlibs blvideos"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+
+
+' The .mp4 files do not fall under any predefined builder filter: without this
+' line the movie would not be copied among the application data.
+#BINARY_FILES+="*.mp4"
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App6()
+
+End
+
+
+Class App6 Extends App
+
+	Const BASE_H:Float = 520.0
+	Const ZOOM:Float = 3.0
+
+	Field cv:Canvas
+
+	Field vid:blVideo
+
+	Field hoverPlay:Bool
+	Field hoverLoop:Bool
+
+	Field loopon:Bool = True
+
+	Field msg:String
+
+
+	Method K:Float()
+
+		Local k:Float = DeviceHeight() / BASE_H
+
+		If k > ZOOM Then k = ZOOM
+		If k < 1 Then k = 1
+
+		Return k
+
+	End
+
+
+	' --- the two buttons, at the bottom
+	Method BtW:Float()
+
+		Return 190 * K()
+
+	End
+
+	Method BtH:Float()
+
+		Return 44 * K()
+
+	End
+
+	Method BtY:Float()
+
+		' not attached to the bottom: on Android the system navigation bar
+		' overlaps the lower part of the screen
+		Return DeviceHeight() - BtH() - 90 * K()
+
+	End
+
+	Method BtPlayX:Float()
+
+		Return 24 * K()
+
+	End
+
+	Method BtLoopX:Float()
+
+		Return BtPlayX() + BtW() + 16 * K()
+
+	End
+
+
+	' --- layout of the four boxes
+	'
+	' Three of the four drawing ways do NOT preserve the aspect: that is
+	' exactly their purpose (Draw fills the rectangle, DrawPart brings a
+	' crop into any rectangle). So they fully take the
+	' shape of the BOX, and the box shape depends on the one of the
+	' screen.
+	'
+	' On a (wide) desktop window the boxes are wide and the movie
+	' fits comfortably. On a portrait phone, with a 2x2 grid, they became
+	' 444x771 - that is, tall and narrow - and a wide movie ended up inside
+	' squashed: three of the four boxes looked distorted, and the only
+	' safe one was DrawFit, which defends its aspect on its own. It was the sign
+	' that the defect was here and not in the decoded frame.
+	'
+	' So: screen taller than wide -> boxes in a column, so they stay
+	' as wide as on desktop. On a wide window the math is identical to
+	' before.
+	Method Cols:Int()
+
+		If DeviceHeight() > DeviceWidth() Then Return 1
+
+		Return 2
+
+	End
+
+
+	Method Rows:Int()
+
+		Return 4 / Cols()
+
+	End
+
+
+	' Space between one box and the next: the caption fits above it too.
+	Method GapX:Float()
+
+		Return 16 * K()
+
+	End
+
+
+	Method GapY:Float()
+
+		Return 40 * K()
+
+	End
+
+
+	Method PanX:Float(i:Int, rw:Float)
+
+		Return 24 * K() + ( i Mod Cols() ) * ( rw + GapX() )
+
+	End
+
+
+	Method PanY:Float(i:Int, rh:Float)
+
+		Return 76 * K() + ( i / Cols() ) * ( rh + GapY() )
+
+	End
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(760, 520, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+		' The path is the assets one, not a file on disk.
+		
+		'vid = New blVideo("cerberus://data/run_1.mp4", loopon, True)
+		'vid = New blVideo("cerberus://data/tspm3.mp4", loopon, True)
+		vid = New blVideo("cerberus://data/demo.mp4", loopon, True)
+				
+		If vid.IsOk() Then
+			msg = "run_1.mp4 opened"
+		Else
+			msg = "video not available on this target"
+		Endif
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		ReadTouch()
+
+		' Brings the latest decoded frame into the Image. If there is no new
+		' one it does not touch the texture, so it costs nothing.
+		vid.Update()
+
+		hoverPlay = IsOnRect(BtPlayX(), BtY(), BtW(), BtH()) <> 0
+		hoverLoop = IsOnRect(BtLoopX(), BtY(), BtW(), BtH()) <> 0
+
+		If IsTouchRel(BtPlayX(), BtY(), BtW(), BtH()) Then
+
+			If vid.IsPlaying() Then
+				vid.Pause()
+				msg = "paused"
+			Else
+				vid.Play()
+				msg = "playing"
+			EndIf
+
+		EndIf
+
+		If IsTouchRel(BtLoopX(), BtY(), BtW(), BtH()) Then
+
+			loopon = Not loopon
+
+			vid.SetLoop(loopon)
+
+			If loopon Then msg = "loop on" Else msg = "loop off"
+
+		EndIf
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		' The full-screen scissor BEFORE the Clear: Clear fills only the area
+		' of the current scissor, and if it was left narrowed by a previous
+		' drawing the old frame stays on screen and you get flickering.
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.10, 0.11, 0.13
+
+		Local k:Float = K()
+
+		' --- header
+
+		cv.SetColor COL_WHITE
+		Testo("BOSHLIBS - MP4 VIDEO", 24 * k, 20 * k)
+
+		cv.SetColor COL_SILVER
+		Testo(msg + "   -   " + vid.Width() + "x" + vid.Height(), 24 * k, 44 * k)
+
+		' --- the four boxes, all from the same frame
+		'    (the layout, and why it changes on a tall screen, is in Cols())
+
+		Local mx:Float = 24 * k
+		Local my:Float = 76 * k
+
+		Local rw:Float = (DeviceWidth() - mx * 2 - GapX() * (Cols() - 1)) / Float(Cols())
+		Local rh:Float = (BtY() - my - GapY() * (Rows() - 1) - 16 * k) / Float(Rows())
+
+		' 1) Draw: fills the box, distorting
+		Riquadro(PanX(0, rw), PanY(0, rh), rw, rh, "Draw - fills")
+		vid.Draw(cv, PanX(0, rw), PanY(0, rh), rw, rh)
+
+		' 2) DrawFit: keeps the aspect, centered
+		Riquadro(PanX(1, rw), PanY(1, rh), rw, rh, "DrawFit - aspect")
+		vid.DrawFit(cv, PanX(1, rw), PanY(1, rh), rw, rh)
+
+		' 3) DrawPartCenter: zoom on a crop taken from the center
+		Riquadro(PanX(2, rw), PanY(2, rh), rw, rh, "DrawPartCenter - zoom")
+		vid.DrawPartCenter(cv, PanX(2, rw), PanY(2, rh), rw, rh, vid.Width() / 3, vid.Height() / 3)
+
+		' 4) DrawRects: the same two rectangles, written out in full
+		Riquadro(PanX(3, rw), PanY(3, rh), rw, rh, "DrawRects - two rects")
+
+		vid.DrawRects(cv, [PanX(3, rw), PanY(3, rh), rw, rh],
+			[Float(vid.Width() / 4), Float(vid.Height() / 4), Float(vid.Width() / 2), Float(vid.Height() / 2)])
+
+		' --- the two buttons
+
+		Local et:String = "Play"
+		If vid.IsPlaying() Then et = "Pause"
+
+		Pulsante(BtPlayX(), BtY(), et, hoverPlay)
+
+		Local el:String = "Loop: off"
+		If loopon Then el = "Loop: on"
+
+		Pulsante(BtLoopX(), BtY(), el, hoverLoop)
+
+		cv.Flush
+
+	End
+
+
+	' Frame and caption of a box.
+	Method Riquadro:Void(x:Float, y:Float, w:Float, h:Float, et:String)
+
+		Local k:Float = K()
+
+		cv.SetColor 0.16, 0.17, 0.20
+		cv.DrawRect(x, y, w, h)
+
+		cv.SetColor COL_CORNFLOWERBLUE
+		Testo(et, x, y - 16 * k)
+
+	End
+
+
+	Method Pulsante:Void(x:Float, y:Float, et:String, hover:Bool)
+
+		Local k:Float = K()
+
+		If hover And IsTouchDown(x, y, BtW(), BtH()) Then
+			cv.SetColor COL_STEELBLUE
+		ElseIf hover Then
+			cv.SetColor COL_CORNFLOWERBLUE
+		Else
+			cv.SetColor COL_SLATEGRAY
+		EndIf
+
+		cv.DrawRect(x, y, BtW(), BtH())
+
+		cv.SetColor COL_WHITE
+
+		cv.PushMatrix()
+		cv.Translate(x + BtW() / 2.0, y + BtH() / 2.0)
+		cv.Scale(k, k)
+		cv.DrawText(et, 0, 0, 0.5, 0.5)
+		cv.PopMatrix()
+
+	End
+
+
+	Method Testo:Void(s:String, x:Float, y:Float)
+
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(x, y)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0)
+		cv.PopMatrix()
+
+	End
+
+End

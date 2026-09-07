@@ -1,0 +1,379 @@
+'
+' keyboard-android-example.cxs  --  example 5 of the "boshlibs" module
+'
+' The real native Android keyboard: autocorrect, suggestions and emoji.
+' A button opens and closes it, and what you type appears below.
+'
+' The text is NOT composed letter by letter from the pressed keys: it arrives
+' already done from the hidden EditText, so it includes the automatic
+' corrections, the words chosen from the suggestions and the emoji (which as a
+' KeyEvent would not arrive at all, because getUnicodeChar() returns 0
+' for them).
+'
+' The text is drawn with blFont.TextImageColor, which uses the SYSTEM font:
+' it is the only way to really see the emoji, because the mojo2 font does not
+' have them. You need the "Color" variant and not the normal TextImage: the
+' latter inverts the pixels to get a white text to colorize, and on a colored
+' emoji the inversion would give the negative.
+'
+' On the PC an on-screen keyboard is not needed, so the module falls back on
+' the physical one: the example can also be tested here, with the same
+' commands.
+'
+' CX modules by bosh77
+'
+
+' Needed by blFont.TextImage, with which the written text is drawn.
+#NATIVEFONTSON = 1
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - native keyboard"
+#GLFW_WINDOW_WIDTH = 760
+#GLFW_WINDOW_HEIGHT = 520
+#GLFW_WINDOW_RESIZABLE = True
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blkeyboard"
+#ANDROID_APP_LABEL="boshlibs blkeyboard"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App5()
+
+End
+
+
+Class App5 Extends App
+
+	Const BASE_H:Float = 520.0
+	Const ZOOM:Float = 3.0
+
+	Field cv:Canvas
+
+	' the written text, rendered with the system font (for the emoji)
+	Field img:Image
+
+	' how many lines of text to show
+	Field righe:String[]
+
+	Field imgs:Image[]
+
+	Field hoverOn:Bool
+	Field hoverClr:Bool
+
+	Field corpo:Int
+
+	' blinking cursor at the end of the text
+	Field battito:Int
+
+
+	Method K:Float()
+
+		Local k:Float = DeviceHeight() / BASE_H
+
+		If k > ZOOM Then k = ZOOM
+		If k < 1 Then k = 1
+
+		Return k
+
+	End
+
+
+	' --- button that opens/closes the keyboard
+	Method BtOnX:Float()
+
+		Return 24 * K()
+
+	End
+
+	Method BtOnY:Float()
+
+		Return 90 * K()
+
+	End
+
+	Method BtW:Float()
+
+		Return 210 * K()
+
+	End
+
+	Method BtH:Float()
+
+		Return 46 * K()
+
+	End
+
+	' --- button that empties the text
+	Method BtClrX:Float()
+
+		Return BtOnX() + BtW() + 16 * K()
+
+	End
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(760, 520, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+		righe = New String[0]
+		imgs = New Image[0]
+
+		corpo = 44
+
+	End
+
+
+	Method Testo:Void(s:String, x:Float, y:Float)
+
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(x, y)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0)
+		cv.PopMatrix()
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		' First: it fills xmou/ymou and the touch flags. On the PC it is also
+		' the one that reads the keys that end up in the text.
+		ReadTouch()
+
+		' On the desktop it composes the text from the physical keyboard; on
+		' Android it does nothing, because the text arrives already ready
+		' from the EditText.
+		blKeyboard.Update()
+
+		hoverOn = IsOnRect(BtOnX(), BtOnY(), BtW(), BtH()) <> 0
+		hoverClr = IsOnRect(BtClrX(), BtOnY(), BtW(), BtH()) <> 0
+
+		If IsTouchRel(BtOnX(), BtOnY(), BtW(), BtH()) Then
+
+			If blKeyboard.Visible() Then
+				blKeyboard.Hide()
+			Else
+				blKeyboard.Show()
+			EndIf
+
+		EndIf
+
+		If IsTouchRel(BtClrX(), BtOnY(), BtW(), BtH()) Then blKeyboard.Clear()
+
+		battito += 1
+
+		' The text images are rebuilt only when the text changes: every
+		' TextImage is a rasterization, it must not be done every frame.
+		If blKeyboard.Changed() Then RifaiTesto()
+
+	End
+
+
+	Method RifaiTesto:Void()
+
+		Local t:String = blKeyboard.Text()
+
+		righe = t.Split(String.FromChar(10))
+
+		imgs = New Image[righe.Length]
+
+		For Local i:Int = 0 Until righe.Length
+
+			If righe[i].Length = 0 Then Continue
+
+			' SYSTEM font, with the Color variant so the emoji do not come out
+			' as a negative.
+			'
+			' On Android the name is "sans-serif" and not "Roboto": the emoji
+			' do NOT fit in Roboto: it is Canvas.drawText that picks them up
+			' again from the system font (NotoColorEmoji) when the set
+			' typeface does not have that character. But blFonts-android, if it
+			' finds the FILE of the requested family, builds the Typeface with
+			' createFromFile, and a typeface created from a file has a weaker
+			' fallback: on some Android versions the emoji would come out as
+			' empty boxes. With a generic name there is no file to find, so you
+			' reach Typeface.create / Typeface.DEFAULT, which have the full
+			' fallback. If you still see empty boxes, try "".
+			#If TARGET="android"
+			imgs[i] = blFont.TextImageColor("sans-serif", corpo, righe[i], 0)
+			#Else
+			imgs[i] = blFont.TextImageColor("Segoe UI Emoji", corpo, righe[i], 0)
+			#EndIf
+
+		Next
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		' The full-screen scissor BEFORE the Clear: Clear fills only the area
+		' of the current scissor, and if it was left narrowed by a previous
+		' drawing the old frame stays on screen and you get flickering.
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.10, 0.11, 0.13
+
+		Local k:Float = K()
+
+		cv.SetColor COL_WHITE
+		Testo("BOSHLIBS - NATIVE KEYBOARD", 24 * k, 24 * k)
+
+		cv.SetColor COL_SILVER
+
+		If blKeyboard.Visible() Then
+			Testo("keyboard open - type away", 24 * k, 52 * k)
+		Else
+			Testo("keyboard closed", 24 * k, 52 * k)
+		EndIf
+
+		' --- the two buttons
+
+		Local et:String = "Open keyboard"
+		If blKeyboard.Visible() Then et = "Close keyboard"
+
+		Pulsante(BtOnX(), BtOnY(), et, hoverOn)
+		Pulsante(BtClrX(), BtOnY(), "Clear", hoverClr)
+
+		' --- the written text, line by line
+
+		Local y:Float = BtOnY() + BtH() + 30 * k
+
+		cv.SetColor COL_CORNFLOWERBLUE
+		Testo("typed text:", 24 * k, y)
+
+		y = y + 26 * k
+
+		' A light field, like a real editor. It really is needed: the text
+		' rendered with the system font keeps its colors - black for the
+		' letters - and on a dark background it would not be seen. The emoji,
+		' which are colored, read well on the light one.
+		Local campox:Float = 24 * k
+		Local campoy:Float = y - 6 * k
+		Local campow:Float = DeviceWidth() - 48 * k
+		Local campoh:Float = DeviceHeight() - campoy - 24 * k
+
+		cv.SetColor COL_WHITESMOKE
+		cv.DrawRect(campox, campoy, campow, campoh)
+
+		' where the last line ends: that is where the cursor goes
+		Local curx:Float = 32 * k
+		Local cury:Float = y
+		Local curh:Float = 24 * k
+
+		If imgs.Length = 0 Then
+
+			cv.SetColor COL_SILVER
+			Testo("(empty)", 32 * k + 14 * k, y)
+
+		Else
+
+			For Local i:Int = 0 Until imgs.Length
+
+				Local im:Image = imgs[i]
+
+				If im <> Null Then
+
+					' COL_WHITE and not a gray: the current color multiplies
+					' the ones of the image, and on an emoji it would dirty it.
+					cv.SetColor COL_WHITE
+
+					Local iw:Float = im.Width * k * 0.6
+					Local ih:Float = im.Height * k * 0.6
+
+					cv.DrawRect(32 * k, y, iw, ih, im)
+
+					curx = 32 * k + iw + 3 * k
+					cury = y
+					curh = ih
+
+					y = y + ih + 6 * k
+
+				Else
+
+					' empty line: the cursor goes to the next line with it
+					curx = 32 * k
+					cury = y
+					curh = 24 * k
+
+					y = y + 24 * k
+
+				EndIf
+
+			Next
+
+		EndIf
+
+		' --- the cursor: half a second on and half a second off
+		If (battito Mod 60) < 30 Then
+
+			cv.SetColor COL_STEELBLUE
+			cv.DrawRect(curx, cury, 3 * k, curh)
+
+		EndIf
+
+		cv.Flush
+
+	End
+
+
+	Method Pulsante:Void(x:Float, y:Float, et:String, hover:Bool)
+
+		Local k:Float = K()
+
+		If hover And IsTouchDown(x, y, BtW(), BtH()) Then
+			cv.SetColor COL_STEELBLUE
+		ElseIf hover Then
+			cv.SetColor COL_CORNFLOWERBLUE
+		Else
+			cv.SetColor COL_SLATEGRAY
+		EndIf
+
+		cv.DrawRect(x, y, BtW(), BtH())
+
+		cv.SetColor COL_WHITE
+
+		cv.PushMatrix()
+		cv.Translate(x + BtW() / 2.0, y + BtH() / 2.0)
+		cv.Scale(k, k)
+		cv.DrawText(et, 0, 0, 0.5, 0.5)
+		cv.PopMatrix()
+
+	End
+
+End

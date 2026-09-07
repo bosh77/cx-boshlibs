@@ -1,0 +1,467 @@
+'
+' menu-example.cxs  --  example 3 of the "boshlibs" module
+'
+' The operating system's native menu bar: menus, submenus,
+' separators, checkable items, radio items and disabled items.
+'
+' Menus are built once in OnCreate. Then, every loop in
+' OnUpdate, each item is asked whether it was pressed:
+'
+'     If apri.Clicked() Then ...
+'
+' Clicked() is a single shot: it returns 1 once and resets, so
+' it must be polled every loop, otherwise the click is lost.
+'
+' The bar at the top only exists on desktop. On Android there is none (the
+' Activity is full-screen without an ActionBar), so the menu is opened on
+' command with ShowPopup from a button drawn by the app: here the "Menu"
+' button at the bottom, which works on every platform.
+'
+' That button needs ReadTouch, like every command drawn by us.
+' The menu items instead are handled by the operating system.
+'
+' CX modules by bosh77
+'
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - native menus"
+#GLFW_WINDOW_WIDTH = 760
+#GLFW_WINDOW_HEIGHT = 520
+#GLFW_WINDOW_RESIZABLE = True
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blmenus"
+#ANDROID_APP_LABEL="boshlibs menu"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App3()
+
+End
+
+
+Class App3 Extends App
+
+	Field cv:Canvas
+
+	' --- File menu
+	Field miNuovo:blMenuItem
+	Field miApri:blMenuItem
+	Field miSalva:blMenuItem
+	Field miEsci:blMenuItem
+
+	' --- File > Recent (submenu)
+	Field miRec1:blMenuItem
+	Field miRec2:blMenuItem
+
+	' --- Edit menu
+	Field miAnnulla:blMenuItem
+	Field miRipeti:blMenuItem
+	Field miGriglia:blMenuItem
+
+	' --- View menu: three radio items, only one on at a time
+	Field miPicc:blMenuItem
+	Field miMedio:blMenuItem
+	Field miGrande:blMenuItem
+
+
+	' --- application state, driven by the menus
+
+	Field righe:String[] = New String[8]
+	Field nrighe:Int
+
+	Field griglia:Bool = True
+	Field zoom:Int = 1          ' 0 small, 1 medium, 2 large
+
+	' Undo stays off until there is something to undo: it is used to
+	' show SetEnabled.
+	Field daannullare:Int
+
+	' --- button that opens the File menu as a popup
+	Field mFile:blMenu
+
+	' Base sizes, thought for a desktop window: they must be multiplied
+	' by K(). On a phone the screen is three times as wide and without
+	' scaling everything would stay tiny.
+	Const PB_W:Float = 150
+	Const PB_H:Float = 44
+
+	' Reference height: at this size K() is worth 1.
+	Const BASE_H:Float = 520.0
+
+	' Maximum magnification. On a phone the screen is four times as tall,
+	' but beyond three times it would look clumsy.
+	Const ZOOM:Float = 3.0
+
+	Field pbHover:Bool
+
+
+	' How much to enlarge text and commands. On desktop it stays 1; on a
+	' phone 2340 px tall it would be 4.5, so it stops at ZOOM.
+	'
+	' It looks at the HEIGHT and not the width: it is the one that changes
+	' the most between a desktop window and a portrait phone, and it is the
+	' same choice made in requesters-example, which reads well on a phone.
+	Method K:Float()
+
+		Local k:Float = DeviceHeight() / BASE_H
+
+		If k > ZOOM Then k = ZOOM
+		If k < 1 Then k = 1
+
+		Return k
+
+	End
+
+
+	Method PbX:Float()
+
+		Return 24 * K()
+
+	End
+
+
+	' Not attached to the bottom: on Android the system navigation bar
+	' overlaps the lower part of the screen and would eat it.
+	Method PbY:Float()
+
+		Return DeviceHeight() - PB_H * K() - 90 * K()
+
+	End
+
+
+	Method PbW:Float()
+
+		Return PB_W * K()
+
+	End
+
+
+	Method PbH:Float()
+
+		Return PB_H * K()
+
+	End
+
+
+	' mojo2 DrawText draws at a fixed size: to enlarge it the matrix
+	' is scaled around the text.
+	Method Testo:Void(s:String, x:Float, y:Float, xh:Float = 0, yh:Float = 0)
+
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(x, y)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0, xh, yh)
+		cv.PopMatrix()
+
+	End
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(760, 520, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+		CostruisciMenu()
+
+		Scrivi("ready - use the menu bar above")
+
+	End
+
+
+	Method CostruisciMenu:Void()
+
+		' --- File
+		mFile = New blMenu("File")
+
+		miNuovo = mFile.AddItem("New")
+		miApri = mFile.AddItem("Open...")
+		miSalva = mFile.AddItem("Save")
+
+		mFile.AddSeparator()
+
+		' a submenu: ask the parent menu and it returns another blMenu
+		Local mRec:blMenu = mFile.AddSubMenu("Recent Documents")
+
+		If mRec <> Null Then
+
+			miRec1 = mRec.AddItem("progetto1.cxs")
+			miRec2 = mRec.AddItem("progetto2.cxs")
+
+		EndIf
+
+		mFile.AddSeparator()
+
+		miEsci = mFile.AddItem("Exit")
+
+		' --- Edit
+		Local mMod:blMenu = New blMenu("Edit")
+
+		miAnnulla = mMod.AddItem("Undo")
+		miRipeti = mMod.AddItem("Redo")
+
+		mMod.AddSeparator()
+
+		' checkable item: it turns on and off
+		miGriglia = mMod.AddItem("Show grid")
+		miGriglia.SetChecked(1)
+
+		' until something is done, Undo is grayed out
+		miAnnulla.SetEnabled(0)
+		miRipeti.SetEnabled(0)
+
+		' --- View: three radio items
+		Local mVis:blMenu = New blMenu("View")
+
+		miPicc = mVis.AddItem("Small zoom")
+		miMedio = mVis.AddItem("Medium zoom")
+		miGrande = mVis.AddItem("Large zoom")
+
+		' SetRadio turns the check mark into a dot
+		miPicc.SetRadio(1)
+		miMedio.SetRadio(1)
+		miGrande.SetRadio(1)
+
+		AggiornaZoom()
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		' Needed by the "Menu" button, not by the real menus.
+		ReadTouch()
+
+		pbHover = IsOnRect(PbX(), PbY(), PbW(), PbH()) <> 0
+
+		' Opens the File dropdown as a popup menu, just above the button.
+		' On Android it is the only way to see the menu.
+		If IsTouchRel(PbX(), PbY(), PbW(), PbH()) Then
+
+			mFile.ShowPopup(PbX(), PbY())
+
+		EndIf
+
+		' Every item must be polled every loop: Clicked() returns 1 only once.
+
+		If Premuto(miNuovo) Then
+			nrighe = 0
+			Scrivi("New")
+			Fatto()
+		EndIf
+
+		If Premuto(miApri) Then Scrivi("Open..."); Fatto()
+		If Premuto(miSalva) Then Scrivi("Save"); Fatto()
+
+		If Premuto(miRec1) Then Scrivi("recent: progetto1.cxs"); Fatto()
+		If Premuto(miRec2) Then Scrivi("recent: progetto2.cxs"); Fatto()
+
+		If Premuto(miEsci) Then Scrivi("Exit"); EndApp()
+
+		If Premuto(miAnnulla) Then
+
+			Scrivi("Undo")
+
+			daannullare -= 1
+
+			If daannullare <= 0 Then
+
+				daannullare = 0
+				miAnnulla.SetEnabled(0)
+				miRipeti.SetEnabled(0)
+
+			EndIf
+
+		EndIf
+
+		If Premuto(miRipeti) Then Scrivi("Redo")
+
+		' checkable item: flip it and rewrite the check mark
+		If Premuto(miGriglia) Then
+
+			griglia = Not griglia
+
+			If griglia Then miGriglia.SetChecked(1) Else miGriglia.SetChecked(0)
+
+			If griglia Then Scrivi("grid on") Else Scrivi("grid off")
+
+		EndIf
+
+		' the three radios: the chosen one turns on and the others turn off
+		If Premuto(miPicc) Then zoom = 0; AggiornaZoom(); Scrivi("small zoom")
+		If Premuto(miMedio) Then zoom = 1; AggiornaZoom(); Scrivi("medium zoom")
+		If Premuto(miGrande) Then zoom = 2; AggiornaZoom(); Scrivi("large zoom")
+
+	End
+
+
+	' Clicked() must only be asked if the item really exists: outside the
+	' desktop AddItem returns Null.
+	Method Premuto:Bool(mi:blMenuItem)
+
+		If mi = Null Then Return False
+
+		Return mi.Clicked() <> 0
+
+	End
+
+
+	' The check mark is placed by the app: the module does not know that the
+	' three items are a group.
+	Method AggiornaZoom:Void()
+
+		If miPicc = Null Then Return
+
+		If zoom = 0 Then miPicc.SetChecked(1) Else miPicc.SetChecked(0)
+		If zoom = 1 Then miMedio.SetChecked(1) Else miMedio.SetChecked(0)
+		If zoom = 2 Then miGrande.SetChecked(1) Else miGrande.SetChecked(0)
+
+	End
+
+
+	' From here on there is something to undo.
+	Method Fatto:Void()
+
+		If miAnnulla = Null Then Return
+
+		daannullare += 1
+
+		miAnnulla.SetEnabled(1)
+		miRipeti.SetEnabled(1)
+
+	End
+
+
+	' Log of the pressed items, the latest on top.
+	Method Scrivi:Void(s:String)
+
+		For Local i:Int = righe.Length - 1 To 1 Step - 1
+			righe[i] = righe[i - 1]
+		Next
+
+		righe[0] = s
+
+		If nrighe < righe.Length Then nrighe += 1
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		' The full-screen scissor BEFORE the Clear: Clear fills only the area
+		' of the current scissor, and if it was left narrowed by a previous
+		' drawing the old frame stays on screen and you get flickering.
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.10, 0.11, 0.13
+
+		Local sc:Float = 1.0
+
+		If zoom = 0 Then sc = 0.8
+		If zoom = 2 Then sc = 1.6
+
+		' the grid, switched on and off from the Edit menu
+		If griglia Then
+
+			cv.SetColor COL_DARKSLATEGRAY
+
+			' Step wants a constant value, so the scaled step is
+			' obtained by counting the lines instead of using Step.
+			Local passo:Float = 40 * K()
+
+			For Local i:Int = 0 To Int(DeviceWidth() / passo)
+				cv.DrawRect(i * passo, 0, K(), DeviceHeight())
+			Next
+
+			For Local i:Int = 0 To Int(DeviceHeight() / passo)
+				cv.DrawRect(0, i * passo, DeviceWidth(), K())
+			Next
+
+		EndIf
+
+		' sc is the zoom chosen from the View menu, k is the screen one
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(24 * k, 24 * k)
+		cv.Scale(sc, sc)
+
+		cv.SetColor COL_WHITE
+		Testo("BOSHLIBS - NATIVE MENUS", 0, 0)
+
+		cv.SetColor COL_SILVER
+		Testo("grid: " + Acceso(griglia) + "    zoom: " + zoom, 0, 22 * k)
+
+		cv.SetColor COL_CORNFLOWERBLUE
+		Testo("last pressed items:", 0, 54 * k)
+
+		cv.SetColor COL_WHITESMOKE
+
+		For Local i:Int = 0 To nrighe - 1
+			Testo(righe[i], 12 * k, (76 + i * 18) * k)
+		Next
+
+		cv.PopMatrix()
+
+		' --- button that opens the popup menu
+
+		If pbHover And IsTouchDown(PbX(), PbY(), PbW(), PbH()) Then
+			cv.SetColor COL_STEELBLUE
+		ElseIf pbHover Then
+			cv.SetColor COL_CORNFLOWERBLUE
+		Else
+			cv.SetColor COL_SLATEGRAY
+		EndIf
+
+		cv.DrawRect(PbX(), PbY(), PbW(), PbH())
+
+		cv.SetColor COL_WHITE
+		Testo("File Menu...", PbX() + PbW() / 2.0, PbY() + PbH() / 2.0, 0.5, 0.5)
+
+		cv.Flush
+
+	End
+
+
+	Method Acceso:String(b:Bool)
+
+		If b Then Return "yes"
+
+		Return "no"
+
+	End
+
+End

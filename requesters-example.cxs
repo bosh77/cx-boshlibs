@@ -1,0 +1,546 @@
+'
+' requesters-example.cxs  --  example 2 of the "boshlibs" module
+'
+' The 7 requesters of blRequesters: seven rectangles used as buttons, each one
+' launches a different request and below you read the outcome.
+'
+' The API is two-phase on ALL targets, so the call sites stay the same
+' everywhere: you launch with AskXxx(tag, ...) and later, inside OnUpdate, you
+' look at Ready(tag). On desktop the native dialog blocks anyway inside
+' AskXxx and the result is ready the next loop; on Android it cannot block,
+' so it polls. No #If in the app code.
+'
+' Input goes through blFuncs: ReadTouch() once per loop in OnUpdate fills
+' xmou/ymou and the touchhit/touchdown/touchrel flags, then IsOnRect lights up
+' the button under the pointer and IsTouchRel (touchrel + IsOnRect) says which
+' one was chosen. You act on RELEASE, not on press: this way you can
+' press and slide away without starting the requester.
+'
+' The two mandatory calls are:
+'     blRequest.Update()      in OnUpdate
+'     blRequest.Draw(canvas)  in OnRender
+' without the first no result ever arrives, without the second the color picker
+' is not visible.
+'
+' CX modules by bosh77
+'
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - requesters"
+
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blrequesters"
+#ANDROID_APP_LABEL="boshlibs req"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+'#ANDROID_GRADLE_VERSION="8.13.2"
+'#ANDROID_JAVA_SOURCE_VERSION="VERSION_1_8"
+'#ANDROID_JAVA_TARGET_VERSION="VERSION_1_8"
+'-----------------------------------------------------
+
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App2()
+
+End
+
+
+Class App2 Extends App
+
+	' Inside the class and not at file level: the file name ends up
+	' in the generated C++ identifier, and "requesters-example" with the dash
+	' is not a valid identifier. Class members do not have the problem.
+	Global BUTLABELS:String[] = [
+		"1   Notify",
+		"2   Confirm",
+		"3   Proceed",
+		"4   Open File",
+		"5   Save File",
+		"6   Pick Dir",
+		"7   Color" ]
+
+	Const NBUT:Int = 7
+
+	' Enlargement of heights and text. The button WIDTH does not use it:
+	' it always fills the whole screen width minus the margins.
+	Const ZOOM:Float = 3.0
+
+	' Base sizes, to be multiplied by K().
+	Const BUT_H:Float = 54
+	Const BUT_GAP:Float = 9
+	Const BUT_TOP:Float = 62
+	Const BUT_MARGIN:Float = 18
+	Const STAT_H:Float = 96
+	Const STAT_GAP:Float = 22
+	Const BOTTOM:Float = 20
+
+	Field cv:Canvas
+
+	' outcome of the last request
+	Field lastName:String = "-"
+	Field lastLine:String = "press a button"
+	Field lastPath:String = ""
+	Field lastCol:Int = -1
+
+	' which button launched the current request
+	Field pending:Int = -1
+
+	' which button is under the pointer (-1 = none)
+	Field hover:Int = -1
+
+
+	Method OnCreate()
+
+		' Tall window: at ZOOM 3 the seven buttons need quite a bit of height.
+		SetDeviceWindow(480, 1040, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+	End
+
+
+	'#########################################################################
+	' BUTTON GEOMETRY
+	'#########################################################################
+
+	' Height that would be needed at scale 1.
+	Method AltezzaBase:Float()
+
+		Return BUT_TOP + NBUT * BUT_H + (NBUT - 1) * BUT_GAP + STAT_GAP + STAT_H + BOTTOM
+
+	End
+
+
+	' Scale factor for heights and text: full ZOOM if it fits, otherwise
+	' the maximum that fits on screen. On a phone (2340 px) you get
+	' exact ZOOM; on a desktop window, which cannot be 1900 px tall,
+	' it is reduced just enough to fit everything.
+	Method K:Float()
+
+		Local k:Float = DeviceHeight() / AltezzaBase()
+
+		If k > ZOOM Then k = ZOOM
+		If k < 1 Then k = 1
+
+		Return k
+
+	End
+
+
+	Method ButX:Float()
+
+		Return BUT_MARGIN
+
+	End
+
+	Method ButW:Float()
+
+		Return DeviceWidth() - BUT_MARGIN * 2
+
+	End
+
+	Method ButH:Float()
+
+		Return BUT_H * K()
+
+	End
+
+	Method ButY:Float(i:Int)
+
+		Local k:Float = K()
+
+		Return BUT_TOP * k + i * (BUT_H + BUT_GAP) * k
+
+	End
+
+
+	' IsOnRect does not want coordinates: it reads xmou/ymou filled by ReadTouch.
+	Method OnButton:Bool(i:Int)
+
+		Return IsOnRect(ButX(), ButY(i), ButW(), ButH()) <> 0
+
+	End
+
+
+	' Text at the current scale: mojo2 DrawText draws at a fixed size,
+	' so to enlarge it the matrix is scaled around the text.
+	Method Testo:Void(s:String, x:Float, y:Float, xh:Float = 0, yh:Float = 0)
+
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(x, y)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0, xh, yh)
+		cv.PopMatrix()
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		' It goes first: it fills xmou/ymou and the touch flags for the whole loop.
+		ReadTouch()
+
+		' Polls the native dialogs on Android and moves the color picker.
+		blRequest.Update()
+
+		LeggiRisultati()
+
+		hover = -1
+
+		' While choosing the color the seven rectangles are out of play: the
+		' picker is drawn on top of them, so they must neither light up
+		' nor respond to touch.
+		If blRequest.ColorPickerOn() Then Return
+
+		For Local i:Int = 0 To NBUT - 1
+
+			If OnButton(i) Then hover = i
+
+			' IsTouchRel = key released AND pointer inside the rectangle.
+			If IsTouchRel(ButX(), ButY(i), ButW(), ButH()) Then Premi(i); Return
+
+		Next
+
+	End
+
+
+	Method Premi:Void(i:Int)
+
+		pending = i
+
+		Select i
+
+			Case 0
+
+				' Notify is fire-and-forget: it produces no result to
+				' read, so it has no tag and does not occupy the slot.
+				blRequest.Notify("NOTIFY", "Replaced 3 strings.")
+
+				lastName = "Notify"
+				lastLine = "shown (no result to read)"
+				pending = -1
+
+			Case 1
+
+				blRequest.AskConfirm("confirm", "FILE CHANGED", "The file was changed outside the editor." + String.FromChar(10) + "Reload it from disk?")
+				lastName = "Confirm"
+				lastLine = "waiting..."
+
+			Case 2
+
+				blRequest.AskProceed("proceed", "SAVE PROJECT", "Do you want to save the changes to the project?", True)
+				lastName = "Proceed"
+				lastLine = "waiting..."
+
+			Case 3
+
+				blRequest.AskOpenFile("open", "Open File", "CX File(*.cxs):cxs;All Files(*.*):*", "")
+				lastName = "Open File"
+				lastLine = "waiting..."
+
+			Case 4
+
+				blRequest.AskSaveFile("save", "Save As", "CX File(*.cxs):cxs", "test.cxs")
+				lastName = "Save File"
+				lastLine = "waiting..."
+
+			Case 5
+
+				blRequest.AskDir("dir", "Choose a folder", "")
+				lastName = "Pick Dir"
+				lastLine = "waiting..."
+
+			Case 6
+
+				Local iniz:Int = lastCol
+				If iniz < 0 Then iniz = $3070C0
+
+				blRequest.AskColor("color", iniz)
+				lastName = "Color"
+				lastLine = "waiting..."
+
+		End
+
+	End
+
+
+	Method LeggiRisultati:Void()
+
+		If blRequest.Ready("confirm") Then
+
+			pending = -1
+
+			If blRequest.ResultInt() = 1 Then
+				lastLine = "OK  (ResultInt = 1)"
+			Else
+				lastLine = "Cancel  (ResultInt = 0)"
+			EndIf
+
+		EndIf
+
+
+		If blRequest.Ready("proceed") Then
+
+			pending = -1
+
+			Select blRequest.ResultInt()
+
+				Case 1
+					lastLine = "Yes  (ResultInt = 1)"
+				Case 0
+					lastLine = "No  (ResultInt = 0)"
+				Default
+					lastLine = "Cancel  (ResultInt = -1)"
+
+			End
+
+		EndIf
+
+
+		If blRequest.Ready("open") Then
+
+			pending = -1
+			EsitoFile("opened")
+
+		EndIf
+
+
+		If blRequest.Ready("save") Then
+
+			pending = -1
+			EsitoFile("saved")
+
+		EndIf
+
+
+		If blRequest.Ready("dir") Then
+
+			pending = -1
+			EsitoFile("folder")
+
+		EndIf
+
+
+		If blRequest.Ready("color") Then
+
+			pending = -1
+
+			Local c:Int = blRequest.ResultInt()
+
+			If c = -1 Then
+
+				lastLine = "cancelled  (ResultInt = -1)"
+
+			Else
+
+				lastCol = c
+				lastLine = "$" + Esa(c) + "   R=" + ((c Shr 16) & $FF) + " G=" + ((c Shr 8) & $FF) + " B=" + (c & $FF)
+
+			EndIf
+
+		EndIf
+
+	End
+
+
+	Method EsitoFile:Void(verbo:String)
+
+		If blRequest.ResultInt() <> 1 Then
+
+			lastLine = "cancelled"
+			Return
+
+		EndIf
+
+		lastPath = blRequest.ResultStr()
+
+		If blRequest.IsUri(lastPath) Then
+
+			' On Android the picker returns a content:// URI, not a path.
+			lastLine = verbo + ": " + blRequest.UriDisplayName(lastPath) + "  (" + blRequest.UriSize(lastPath) + " byte)"
+
+		Else
+
+			lastLine = verbo + ": " + lastPath
+
+		EndIf
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		' The full-screen scissor BEFORE the Clear: Clear fills only the area
+		' of the current scissor, and if it was left narrowed by a previous
+		' drawing the old frame stays on screen and you get flickering.
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.09, 0.09, 0.11
+
+		Local k:Float = K()
+		Local bh:Float = ButH()
+
+		' --- title
+
+		cv.SetColor 1, 1, 1
+		Testo("BOSHLIBS - REQUESTERS   -   7 requests", BUT_MARGIN, 20 * k)
+
+		' --- buttons
+
+		For Local i:Int = 0 To NBUT - 1
+
+			Local y:Float = ButY(i)
+
+			If i = pending Then
+				cv.SetColor 0.85, 0.55, 0.15
+			ElseIf i = hover And IsTouchDown(ButX(), y, ButW(), bh) Then
+				' pressed: darker, until it is released
+				cv.SetColor 0.13, 0.24, 0.38
+			ElseIf i = hover Then
+				' under the pointer: lit up
+				cv.SetColor 0.30, 0.48, 0.70
+			Else
+				cv.SetColor 0.20, 0.34, 0.52
+			EndIf
+
+			cv.DrawRect(ButX(), y, ButW(), bh)
+
+			cv.SetColor 0.45, 0.55, 0.70
+			Cornice(ButX(), y, ButW(), bh, 2 * k)
+
+			cv.SetColor 1, 1, 1
+
+			Testo(BUTLABELS[i], ButX() + 16 * k, y + bh / 2.0, 0, 0.5)
+
+		Next
+
+		' --- outcome
+
+		Local sy:Float = ButY(NBUT - 1) + bh + STAT_GAP * k
+		Local sh:Float = STAT_H * k
+
+		cv.SetColor 0.13, 0.13, 0.16
+		cv.DrawRect(BUT_MARGIN, sy, ButW(), sh)
+
+		cv.SetColor 0.45, 0.45, 0.50
+		Cornice(BUT_MARGIN, sy, ButW(), sh, 2 * k)
+
+		Local tx:Float = BUT_MARGIN + 12 * k
+		Local tw:Float = ButW() - 24 * k
+
+		cv.SetColor 0.65, 0.75, 0.95
+		Testo(lastName, tx, sy + 12 * k)
+
+		cv.SetColor 1, 1, 1
+		Testo(Accorcia(lastLine, tw), tx, sy + 40 * k)
+
+		' sample of the last chosen color
+		If lastCol >= 0 Then
+
+			cv.SetColor(lastCol)
+			cv.DrawRect(tx, sy + 66 * k, 60 * k, 20 * k)
+
+			cv.SetColor 0.6, 0.6, 0.6
+			Cornice(tx, sy + 66 * k, 60 * k, 20 * k, 1 * k)
+
+		EndIf
+
+		' --- the color picker draws here on top of everything
+
+		blRequest.Draw(cv)
+
+		cv.Flush
+
+	End
+
+
+	Method Cornice:Void(x:Float, y:Float, w:Float, h:Float, t:Float)
+
+		cv.DrawRect(x, y, w, t)
+		cv.DrawRect(x, y + h - t, w, t)
+		cv.DrawRect(x, y, t, h)
+		cv.DrawRect(x + w - t, y, t, h)
+
+	End
+
+
+	'#########################################################################
+	' UTILITIES
+	'#########################################################################
+
+	Method Esa:String(v:Int)
+
+		Local cifre:String = "0123456789ABCDEF"
+		Local s:String = ""
+
+		For Local i:Int = 5 To 0 Step - 1
+
+			Local n:Int = (v Shr (i * 4)) & $F
+			s = s + cifre[n..n + 1]
+
+		Next
+
+		Return s
+
+	End
+
+
+	' Shortens based on the available PIXELS, not characters: with enlarged
+	' text a fixed character limit would be wrong.
+	Method Accorcia:String(s:String, wmax:Float)
+
+		Local k:Float = K()
+
+		' TextWidth belongs to the Font, not the Canvas.
+		Local f:Font = cv.Font
+
+		If f = Null Then Return s
+
+		If f.TextWidth(s) * k <= wmax Then Return s
+
+		' It cuts from the head: in paths the interesting part is at the end.
+		For Local i:Int = 1 To s.Length - 1
+
+			Local t:String = "..." + s[i..]
+
+			If f.TextWidth(t) * k <= wmax Then Return t
+
+		Next
+
+		Return "..."
+
+	End
+
+End

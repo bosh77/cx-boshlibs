@@ -1,0 +1,491 @@
+'
+' httprequest-example.cxs  --  example 9 of the "boshlibs" module
+'
+' HTTP and HTTPS requests without blocking the game: a GET, a text POST and
+' a POST of 5 MB of raw bytes.
+'
+' The test.php at the address below sends back exactly the body
+' it receives, so the POST verifies itself: what comes back must be
+' identical to what was sent.
+'
+' The calls are three:
+'
+'     req = New blHttpRequest("GET", address)   and then req.Send()
+'     blHttpRequest.UpdateAll()                 in OnUpdate
+'     If req.Done() Then ... req.ResponseText()
+'
+' UpdateAll() only serves to fire OnBlHttpRequestComplete: whoever prefers
+' to check Done() themselves can also skip it. Here both
+' paths are used, to show them.
+'
+' CX modules by bosh77
+'
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - http requests"
+#GLFW_WINDOW_WIDTH = 760
+#GLFW_WINDOW_HEIGHT = 520
+#GLFW_WINDOW_RESIZABLE = True
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blhttp"
+#ANDROID_APP_LABEL="boshlibs blhttp"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+
+
+' The network permission must NOT be declared here: it is added to the
+' manifest by the blHttpRequests module, which is the one that knows it needs it.
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App9()
+
+End
+
+
+Class App9 Extends App Implements IOnBlHttpRequestComplete
+
+	Const BASE_H:Float = 520.0
+	Const ZOOM:Float = 3.0
+
+	' The test php sends back exactly the body it receives.
+	Const SENDURL:String = "https://www.kickoffworld.it/2026/PROVAPOST/test.php"
+	Const SITOURL:String = "https://www.kickoffworld.it"
+
+	' How many bytes the big test sends.
+	Const BIGBYTES:Int = 5000000
+
+	Field cv:Canvas
+
+	Field pan:blPanel
+
+	Field btGet:blButton
+	Field btSito:blButton
+	Field btPost:blButton
+	Field btBig:blButton
+
+	Field req:blHttpRequest
+
+	' 1 = GET on test.php, 2 = text POST, 3 = POST of 5 MB, 4 = GET on the site
+	Field mode:Int
+
+	Field msg:String = "press a button"
+
+	Field sent:String
+	Field recv:String
+
+	Field httpstatus:Int
+
+	' how many bytes the current test must send: used by the bar
+	Field tosend:Int = 1
+
+	' the bytes of the big test, kept to compare with the ones that come back
+	Field big:Int[]
+
+	Field verdict:String
+
+
+	Method K:Float()
+
+		Local k:Float = DeviceHeight() / BASE_H
+
+		If k > ZOOM Then k = ZOOM
+		If k < 1 Then k = 1
+
+		Return k
+
+	End
+
+
+	Method BarraH:Float()
+
+		Return 42 * K()
+
+	End
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(760, 520, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+		blControlsTheme.scale = K()
+
+		Costruisci()
+
+		If Not blHttpRequest.Available() Then msg = "no native networking on this target"
+
+	End
+
+
+	Method Costruisci:Void()
+
+		Local k:Float = K()
+
+		pan = New blPanel()
+
+		Local bh:Float = BarraH()
+
+		Local sp:Float = 5 * k
+
+		Local w:Float = (DeviceWidth() - sp * 3) / 4.0
+
+		btGet = pan.AddButton(0, 0, w, bh, "GET test.php")
+		btSito = pan.AddButton(w + sp, 0, w, bh, "GET site")
+		btPost = pan.AddButton((w + sp) * 2, 0, w, bh, "POST text")
+		btBig = pan.AddButton((w + sp) * 3, 0, w, bh, "POST 5 MB")
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		ReadTouch()
+
+		' Fires OnBlHttpRequestComplete on finished requests. Without it,
+		' the callback would never trigger (Done() instead works
+		' anyway, because the state is updated on each poll).
+		blHttpRequest.UpdateAll()
+
+		pan.Update()
+
+		' One test at a time: while the request is in flight the buttons are
+		' disabled, so they do not overlap.
+		Local busy:Bool = req <> Null And req.IsRunning()
+
+		btGet.enabled = Not busy
+		btSito.enabled = Not busy
+		btPost.enabled = Not busy
+		btBig.enabled = Not busy
+
+		If btGet.Clicked() Then FaiGet()
+		If btSito.Clicked() Then FaiSito()
+		If btPost.Clicked() Then FaiPost()
+		If btBig.Clicked() Then FaiBig()
+
+	End
+
+
+	Method FaiGet:Void()
+
+		mode = 1
+
+		big = New Int[0]
+		tosend = 1
+
+		sent = "(nothing: a GET has no body)"
+		recv = ""
+		verdict = ""
+
+		msg = "GET in progress..."
+
+		req = New blHttpRequest("GET", SENDURL, Self)
+		req.Send()
+
+	End
+
+
+	' The same GET, but on the site home page instead of the test php.
+	'
+	' Works on desktop, Android and iOS. On html5 NO, and it is not a defect of
+	' the module: in the browser the same-origin rule applies, and a page
+	' served from one address can only read the response of another site if
+	' that site sends the Access-Control-Allow-Origin header. test.php does
+	' send it (it is the first line of the php), the site home page does not.
+	Method FaiSito:Void()
+
+		mode = 4
+
+		big = New Int[0]
+		tosend = 1
+
+		sent = "(nothing: a GET has no body)"
+		recv = ""
+		verdict = ""
+
+		msg = "GET on the home page in progress..."
+
+		req = New blHttpRequest("GET", SITOURL, Self)
+		req.Send()
+
+	End
+
+
+	Method FaiPost:Void()
+
+		mode = 2
+
+		big = New Int[0]
+
+		Local r:String = "HELLO WORLD!"
+
+		tosend = r.Length
+
+		sent = r
+		recv = ""
+		verdict = ""
+
+		msg = "POST of text in progress..."
+
+		req = New blHttpRequest("POST", SENDURL, Self)
+		req.Send(r, "application/x-www-form-urlencoded", "utf8")
+
+	End
+
+
+	Method FaiBig:Void()
+
+		mode = 3
+
+		big = New Int[BIGBYTES]
+
+		' Random bytes, so the comparison on return means something.
+		For Local i:Int = 0 Until big.Length
+			big[i] = Rnd(0, 256) & 255
+		Next
+
+		tosend = big.Length
+
+		sent = "5,000,000 random bytes"
+		recv = ""
+		verdict = ""
+
+		msg = "POST of 5 MB in progress..."
+
+		req = New blHttpRequest("POST", SENDURL, Self)
+		req.Send(big)
+
+	End
+
+
+	'#########################################################################
+	' THE RESPONSE
+	'#########################################################################
+
+	Method OnBlHttpRequestComplete:Void(r:blHttpRequest)
+
+		httpstatus = r.Status()
+
+		If r.Failed() Then
+
+			msg = "request failed"
+			verdict = "code " + httpstatus
+
+			' In the browser zero almost always means only one thing.
+			#If TARGET="html5"
+			If httpstatus = 0 Then
+
+				verdict = "blocked by the browser: the site does not send Access-Control-Allow-Origin"
+
+			EndIf
+			#EndIf
+
+			Print "[example] failed, status " + httpstatus
+
+			Return
+
+		EndIf
+
+		msg = "response arrived, code " + httpstatus
+
+		Select mode
+
+			Case 3
+
+				' Real test: what comes back must be identical to what
+				' went out, byte by byte.
+				Local back:Int[] = r.ResponseBytes()
+
+				recv = back.Length + " bytes returned"
+
+				If back.Length <> big.Length Then
+
+					verdict = "DIFFERENT: " + back.Length + " back instead of " + big.Length
+
+				Else
+
+					Local bad:Int = -1
+
+					For Local i:Int = 0 Until back.Length
+
+						If back[i] <> big[i] Then
+							bad = i
+							Exit
+						EndIf
+
+					Next
+
+					If bad < 0 Then
+						verdict = "IDENTICAL, all " + back.Length + " bytes"
+					Else
+						verdict = "DIFFERENT from byte " + bad
+					EndIf
+
+				EndIf
+
+			Default
+
+				Local t:String = r.ResponseText()
+
+				recv = LeftString(t, 60)
+
+				If mode = 2 Then
+
+					If t = sent Then
+						verdict = "IDENTICAL to what was sent"
+					Else
+						verdict = "DIFFERENT: " + t.Length + " characters"
+					EndIf
+
+				Else
+
+					verdict = t.Length + " characters received"
+
+				EndIf
+
+		End
+
+		Print "[example] status " + httpstatus + " - " + verdict
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.10, 0.11, 0.13
+
+		Local k:Float = K()
+
+		Local y:Float = BarraH() + 10 * k
+
+		cv.SetColor COL_WHITE
+		Testo("BOSHLIBS - HTTP REQUESTS", 6 * k, y)
+
+		y += 22 * k
+
+		cv.SetColor COL_SLATEGRAY
+		Testo(SENDURL, 6 * k, y)
+
+		y += 26 * k
+
+		cv.SetColor COL_CORNFLOWERBLUE
+		Testo(msg, 6 * k, y)
+
+		y += 30 * k
+
+		' --- the two progress bars
+
+		Local sending:Int = 0
+		Local recving:Int = 0
+
+		If req <> Null Then
+			sending = req.BytesSending()
+			recving = req.BytesReceived()
+		EndIf
+
+		Barra("sent", sending, tosend, 6 * k, y, k)
+		y += 40 * k
+
+		Barra("received", recving, tosend, 6 * k, y, k)
+		y += 46 * k
+
+		' --- what went out and what came back
+
+		cv.SetColor COL_SILVER
+		Testo("SENT: " + sent, 6 * k, y)
+
+		y += 22 * k
+
+		Testo("RETURNED: " + recv, 6 * k, y)
+
+		y += 30 * k
+
+		If verdict.Length > 0 Then
+
+			If verdict.StartsWith("IDENTIC") Then
+				cv.SetColor COL_MEDIUMSEAGREEN
+			Else
+				cv.SetColor COL_TOMATO
+			EndIf
+
+			Testo(verdict, 6 * k, y)
+
+		EndIf
+
+		' --- the buttons last
+		pan.Draw(cv)
+
+		cv.Flush
+
+	End
+
+
+	Method Barra:Void(et:String, v:Int, tot:Int, x:Float, y:Float, k:Float)
+
+		Local w:Float = DeviceWidth() - 12 * k
+		Local h:Float = 10 * k
+
+		If tot < 1 Then tot = 1
+
+		Local p:Float = v / Float(tot)
+
+		If p < 0 Then p = 0
+		If p > 1 Then p = 1
+
+		cv.SetColor COL_SILVER
+		Testo(et + ": " + v, x, y)
+
+		cv.SetColor COL_DARKSLATEGRAY
+		cv.DrawRect(x, y + 18 * k, w, h)
+
+		cv.SetColor COL_MEDIUMSEAGREEN
+		cv.DrawRect(x, y + 18 * k, w * p, h)
+
+	End
+
+
+	Method Testo:Void(s:String, x:Float, y:Float)
+
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(x, y)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0)
+		cv.PopMatrix()
+
+	End
+
+End

@@ -1,0 +1,265 @@
+
+'
+' native-fonts.cxs  --  example 1 of the "boshlibs" module
+'
+' Shows the 3 ways to create a font and, below, the list of the fonts
+' installed on the system (each name written with its own font).
+'
+' It also uses blFuncs for input: ReadTouch() in OnUpdate, IsOnRect to
+' highlight the "Back to top" button and IsTouchRel to press it.
+'
+' CX modules by bosh77
+'
+
+
+' Must come before the Imports: it turns on the native part of blFonts.
+#NATIVEFONTSON = 1
+
+#GLFW_WINDOW_TITLE="boshlibs - native fonts"
+#GLFW_WINDOW_WIDTH = 900
+#GLFW_WINDOW_HEIGHT = 700
+#GLFW_WINDOW_RESIZABLE=True
+'#GLFW_WINDOW_HEIGHT = 2340 / 3
+#GLFW_WINDOW_SAMPLES=0
+#GLFW_WINDOW_DECORATED=True
+#GLFW_WINDOW_FLOATING=False
+#GLFW_WINDOW_FULLSCREEN=False
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blnativefonts"
+#ANDROID_APP_LABEL="boshlibs fonts"
+
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+'#GLFW_WINDOW_WIDTH = 1080 / 3
+
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+'#ANDROID_GRADLE_VERSION="8.13.2"
+'#ANDROID_JAVA_SOURCE_VERSION="VERSION_1_8"
+'#ANDROID_JAVA_TARGET_VERSION="VERSION_1_8"
+'-----------------------------------------------------
+
+
+' .ttf files do NOT fall under any predefined filter (TEXT/IMAGE/SOUND/MUSIC
+' are *.txt|*.xml|*.json, *.png|*.jpg|..., *.wav|..., and BINARY is *.bin|*.dat).
+' Without this line a font placed in SweetHome.data would simply be
+' ignored by the builder and would never end up in the apk assets.
+#BINARY_FILES+="*.ttf|*.otf|*.mp4"
+
+
+#GLFW_INSTALLER_PATH="INSTALLER"
+#GLFW_INSTALLER_NAME ="SweetHome"
+
+#GLFW_CREATE_INSTALLER = False
+
+
+
+
+
+
+
+' .ttf files do not fall under any predefined filter (TEXT/IMAGE/SOUND/MUSIC),
+' without this line the font in native-fonts.data would be ignored by the builder.
+#BINARY_FILES+="*.ttf|*.otf"
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App1()
+
+End
+
+
+Class App1 Extends App
+
+	Field Canv:Canvas
+
+	' 1) ready-made atlas: native-fonts.data/fonts/manrope.png + .txt
+	Field fFile:blFont
+
+	' 2a) system font, by name and size
+	Field fSys:blFont
+
+	' 2b) .ttf font taken from the assets
+	Field fTtf:blFont
+
+	' 3) a single line of text, already rasterized by the native side
+	Field imgTxt:Image
+
+	' the scrollable list of the installed fonts
+	Field fl:blFontList
+
+	Field fsList:Int
+
+	' --- "Back to top" button: brings the list back to the top
+	Const BTN_W:Float = 150
+	Const BTN_H:Float = 40
+
+	Field btnHover:Bool
+
+
+	Method BtnX:Float()
+
+		Return DeviceWidth() - BTN_W - 20
+
+	End
+
+	Method BtnY:Float()
+
+		Return 248
+
+	End
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(900, 700, 4 + 16)
+		SetUpdateRate(60)
+
+		Canv = New Canvas
+
+		' --- 1) FONT FROM A READY-MADE FILE ----------------------------
+		' The name is the one of the two files in data/fonts, without extension.
+		fFile = New blFont("manrope")
+
+		' --- 2a) SYSTEM FONT -------------------------------------------
+		' On Android the system fonts are different: Georgia is not there.
+		#If TARGET="android"
+		fSys = New blFont("Roboto", 44)
+		#Else
+		fSys = New blFont("Georgia", 44)
+		#Endif
+
+		' --- 2b) .TTF FONT FROM THE ASSETS -----------------------------
+		' The file name must match EXACTLY (uppercase letters
+		' included: Android assets are case sensitive).
+		fTtf = New blFont("cerberus://data/Vineta BT Regular.ttf", 44)
+
+		' --- 3) A SINGLE LINE OF TEXT AS AN IMAGE ----------------------
+		' It does not build the alphabet: it costs as much as the text. The image is
+		' white with an alpha channel, the color is decided by whoever draws it.
+		#If TARGET="android"
+		imgTxt = blFont.TextImage("Roboto", 44, "Third: CreateTextImage", 0)
+		#Else
+		imgTxt = blFont.TextImage("Verdana", 44, "Third: CreateTextImage", 0)
+		#Endif
+
+		' --- list of the installed fonts -------------------------------
+		' Every row is a TextImage, not an atlas: that is why the list
+		' can keep all the fonts it found in memory.
+		fsList = DeviceHeight() / 26
+
+		If fsList < 22 Then fsList = 22
+		If fsList > 34 Then fsList = 34
+
+		fl = New blFontList(fsList)
+
+		Print "fonts found: " + fl.Count()
+
+	End
+
+
+	Method OnUpdate()
+
+		' the frame is recomputed every loop, so the list follows the window
+		fl.SetView(20, 300, DeviceWidth() - 40, DeviceHeight() - 320)
+
+		' ReadTouch() first: it is the only point of the library that reads the
+		' mouse/touch. Everything else (including the list wheel) uses
+		' the globals it fills in, so it must be called before fl.Update().
+		ReadTouch()
+
+		fl.Update()
+
+		btnHover = IsOnRect(BtnX(), BtnY(), BTN_W, BTN_H) <> 0
+
+		' on release inside the rectangle: the list goes back to the top
+		If IsTouchRel(BtnX(), BtnY(), BTN_W, BTN_H) Then
+
+			fl.scroll = 0
+			fl.vel = 0
+
+		EndIf
+
+	End
+
+
+	Method OnRender()
+
+		
+		Canv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		Canv.Clear 0.96, 0.95, 0.91
+
+		' 1) atlas from file. The atlas was created at a large size, so
+		'    here it is drawn scaled down: the last parameter is the scale.
+		fFile.DrawText(Canv, "First: font from a ready-made file", 20, 20, $1F3B2C, 0, 0.45)
+
+		' 2a) system font
+		fSys.DrawText(Canv, "Second: system font", 20, 90, $C4674A, 0, 1)
+
+		' 2b) .ttf from the assets
+		fTtf.DrawText(Canv, "Second bis: .ttf font", 20, 155, $4C7A5A, 0, 1)
+
+		' 3) already rasterized text: it is drawn like any other Image
+		If imgTxt <> Null Then
+
+			Canv.SetColor $30506A
+			Canv.DrawRect(20, 220, imgTxt.Width, imgTxt.Height, imgTxt)
+
+		EndIf
+
+		' label of the list, written with the font from file
+		fFile.DrawText(Canv, "Installed fonts: " + fl.Count(), 20, 275, $8A9A8E, 0, 0.22)
+
+		' --- "Back to top" button, highlighted when you hover over it
+		If btnHover And IsTouchDown(BtnX(), BtnY(), BTN_W, BTN_H) Then
+			Canv.SetColor COL_STEELBLUE
+		ElseIf btnHover Then
+			Canv.SetColor COL_CORNFLOWERBLUE
+		Else
+			Canv.SetColor COL_SLATEGRAY
+		EndIf
+
+		Canv.DrawRect(BtnX(), BtnY(), BTN_W, BTN_H)
+
+		fFile.DrawText(Canv, "Back to top", BtnX() + 20, BtnY() + 12, COL_WHITE, 0, 0.2)
+
+		' the list, each name written with itself
+		fl.Draw(Canv)
+
+		' --- input state, so you can see what ReadTouch fills in
+		Canv.SetColor COL_DIMGRAY
+
+		Local st:String = "xmou " + xmou + "  ymou " + ymou
+
+		If touchhit Then st = st + "   HIT"
+		If touchdown Then st = st + "   DOWN"
+		If touchrel Then st = st + "   REL"
+
+		Canv.DrawText(st, 20, DeviceHeight() - 16)
+
+		Canv.Flush
+
+	End
+
+End

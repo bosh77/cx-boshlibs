@@ -1,0 +1,318 @@
+'
+' printer-example.cxs  --  example 4 of the "boshlibs" module
+'
+' Printing on paper with exact measurements: you build a page as a list of
+' commands, preview it on screen and send it to the printer.
+'
+' Coordinates are in TENTHS OF A MILLIMETRE, and you write them with the helpers:
+'
+'     blPrint.CM(10)   ->  10 cm
+'     blPrint.MM(45)   ->  45 mm
+'
+' The two test lines are exactly for checking with a ruler: one
+' horizontal 10 cm line and a vertical 16 cm line. If they come out
+' with that exact size, the conversion is right.
+'
+' Commands:
+'     S  printer settings (system window)
+'     P  print
+'     mouse wheel, or the two + / - buttons top right, for zoom
+'
+' On the + and - keys: GLFW reports the PHYSICAL POSITION of the key according
+' to the US layout, not the character printed on it. On an Italian keyboard
+' "+" is where the US has "]" and "-" is where the US has "/", so
+' they arrive as KEY_CLOSEBRACKET and KEY_SLASH, not as KEY_EQUALS and KEY_MINUS.
+' Here all three pairs are accepted (Italian, American, keypad),
+' but the wheel and the on-screen buttons remain the path that always works -
+' and on Android they are the only one.
+'
+' CX modules by bosh77
+'
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - printer"
+#GLFW_WINDOW_WIDTH = 760
+#GLFW_WINDOW_HEIGHT = 520
+#GLFW_WINDOW_RESIZABLE = True
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blprinter"
+#ANDROID_APP_LABEL="boshlibs blprinter"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+
+
+' The images to print are read back from disk by the printer, so the .jpg
+' must end up in the assets copied into the build folder.
+#BINARY_FILES+="*.jpg"
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App4()
+
+End
+
+
+Class App4 Extends App
+
+	' A4 sheet in tenths of a millimetre: 21 x 29.7 cm.
+	Const FOGLIO_W:Float = 2100
+	Const FOGLIO_H:Float = 2970
+
+	Field cv:Canvas
+
+	Field doc:blPrintDoc
+
+	' screen pixels per drawing unit
+	Field zoom:Float = 0.16
+
+	Field msg:String = "S = settings    P = print    wheel or +/- = zoom"
+
+	' --- the two small zoom buttons, top right
+	Const ZB:Float = 30
+
+	Field zbHover:Int = -1
+
+
+	Method ZbX:Float(i:Int)
+
+		Return DeviceWidth() - 80 + i * (ZB + 6)
+
+	End
+
+	Method ZbY:Float()
+
+		Return 12
+
+	End
+
+	Field datadir:String
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(760, 520, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+		' From the module, not from brl.process: the latter does not exist on
+		' Android and boshlibs must not depend on the installation modules.
+		datadir = blPrint.DataDir()
+
+		Print "data folder: " + datadir
+
+		CostruisciPagina()
+
+	End
+
+
+	'#########################################################################
+	' THE PAGE
+	'#########################################################################
+
+	Method CostruisciPagina:Void()
+
+		doc = New blPrintDoc()
+
+		' --- the sheet border, 1 cm margin on each side
+		doc.AddRect(blPrint.CM(1), blPrint.CM(1), blPrint.CM(20), blPrint.CM(28.7), 1, COL_SILVER)
+
+		' --- THE TWO LINES TO MEASURE WITH A RULER
+		'
+		' Horizontal: from x = 2 cm to x = 12 cm, so exactly 10 cm long.
+		doc.AddLine(blPrint.CM(2), blPrint.CM(3), blPrint.CM(12), blPrint.CM(3), 3, COL_RED)
+
+		' Vertical: from y = 3 cm to y = 19 cm, so exactly 16 cm long.
+		doc.AddLine(blPrint.CM(2), blPrint.CM(3), blPrint.CM(2), blPrint.CM(19), 3, COL_BLUE)
+
+		' --- ticks every centimetre on the horizontal line, to check
+		'     that there is no drift along the way
+		For Local i:Int = 0 To 10
+
+			Local x:Float = blPrint.CM(2 + i)
+
+			doc.AddLine(x, blPrint.CM(3), x, blPrint.CM(2.7), 1, COL_RED)
+
+		Next
+
+		' --- ticks every centimetre on the vertical one
+		For Local i:Int = 0 To 16
+
+			Local y:Float = blPrint.CM(3 + i)
+
+			doc.AddLine(blPrint.CM(2), y, blPrint.CM(1.7), y, 1, COL_BLUE)
+
+		Next
+
+		' --- the texts
+		doc.AddText(blPrint.CM(2), blPrint.CM(1.4), "boshlibs - print test", "Arial", 60, COL_BLACK)
+
+		doc.AddText(blPrint.CM(3.2), blPrint.CM(2.1), "horizontal 10 cm", "Arial", 40, COL_RED)
+
+		doc.AddText(blPrint.CM(2.6), blPrint.CM(19.4), "vertical 16 cm", "Arial", 40, COL_BLUE)
+
+		' --- the two images
+		doc.AddImage(blPrint.CM(6), blPrint.CM(5), datadir + "knight.png")
+
+		doc.AddImage(blPrint.CM(6), blPrint.CM(13), datadir + "fiore.jpg")
+
+		doc.AddText(blPrint.CM(6), blPrint.CM(4.4), "knight.png", "Arial", 34, COL_DIMGRAY)
+
+		doc.AddText(blPrint.CM(6), blPrint.CM(12.4), "fiore.jpg", "Arial", 34, COL_DIMGRAY)
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		ReadTouch()
+
+		If KeyHit(KEY_S) Then
+
+			' System window: printer, format, orientation.
+			blPrint.ShowSettings()
+
+			msg = "settings: " + blPrint.SettingsLine()
+
+		EndIf
+
+		If KeyHit(KEY_P) Then
+
+			If doc.Print() Then
+				msg = "printed on: " + blPrint.SettingsLine()
+			Else
+				msg = "print failed - press S and choose a printer"
+			EndIf
+
+		EndIf
+
+		' --- zoom: wheel, on-screen buttons, numeric keypad
+
+		If zmou > 0 Then zoom = zoom * 1.25
+		If zmou < 0 Then zoom = zoom / 1.25
+
+		zbHover = -1
+
+		For Local i:Int = 0 To 1
+
+			If IsOnRect(ZbX(i), ZbY(), ZB, ZB) Then zbHover = i
+
+			If IsTouchRel(ZbX(i), ZbY(), ZB, ZB) Then
+
+				If i = 0 Then zoom = zoom / 1.25 Else zoom = zoom * 1.25
+
+			EndIf
+
+		Next
+
+		' Italian keyboard: + and - are where the US has ] and /
+		If KeyHit(KEY_CLOSEBRACKET) Then zoom = zoom * 1.25
+		If KeyHit(KEY_SLASH) Then zoom = zoom / 1.25
+
+		' American keyboard
+		If KeyHit(KEY_EQUALS) Then zoom = zoom * 1.25
+		If KeyHit(KEY_MINUS) Then zoom = zoom / 1.25
+
+		' numeric keypad
+		If KeyHit(KEY_NUMADD) Then zoom = zoom * 1.25
+		If KeyHit(KEY_NUMSUBTRACT) Then zoom = zoom / 1.25
+
+		If zoom < 0.03 Then zoom = 0.03
+		If zoom > 1.5 Then zoom = 1.5
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		' The full-screen scissor BEFORE the Clear: Clear fills only the area
+		' of the current scissor, and if it was left narrowed by a previous
+		' drawing the old frame stays on screen and you get flickering.
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.16, 0.17, 0.20
+
+		' --- the sheet, centered horizontally
+		Local fw:Float = FOGLIO_W * zoom
+		Local fh:Float = FOGLIO_H * zoom
+
+		Local ox:Float = (DeviceWidth() - fw) / 2.0
+		Local oy:Float = 60
+
+		cv.PushMatrix()
+		cv.Translate(ox, oy)
+
+		cv.SetColor COL_WHITE
+		cv.DrawRect(0, 0, fw, fh)
+
+		' the preview: the same commands that will go to the print
+		doc.Draw(cv, zoom)
+
+		cv.PopMatrix()
+
+		' --- top bar
+		cv.SetColor 0.10, 0.11, 0.13
+		cv.DrawRect(0, 0, DeviceWidth(), 54)
+
+		cv.SetColor COL_WHITE
+		cv.DrawText("BOSHLIBS - PRINTER", 16, 12)
+
+		cv.SetColor COL_CORNFLOWERBLUE
+		cv.DrawText(msg, 16, 32)
+
+		' --- the two small zoom buttons
+		For Local i:Int = 0 To 1
+
+			If zbHover = i Then
+				cv.SetColor COL_CORNFLOWERBLUE
+			Else
+				cv.SetColor COL_SLATEGRAY
+			EndIf
+
+			cv.DrawRect(ZbX(i), ZbY(), ZB, ZB)
+
+			cv.SetColor COL_WHITE
+
+			Local et:String = "+"
+			If i = 0 Then et = "-"
+
+			cv.DrawText(et, ZbX(i) + ZB / 2.0, ZbY() + ZB / 2.0, 0.5, 0.5)
+
+		Next
+
+		cv.SetColor COL_SILVER
+		cv.DrawText("zoom " + Int(zoom * 100) + "%", DeviceWidth() - 190, 20)
+
+		cv.Flush
+
+	End
+
+End

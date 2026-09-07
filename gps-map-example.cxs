@@ -1,0 +1,405 @@
+'
+' gps-map-example.cxs  --  example 8 of the "boshlibs" module
+'
+' The phone position (blGPS) and a scrollable map (blMaps).
+'
+' The map is made of tiles downloaded from OpenStreetMap: free, without
+' a key and without registration. In return their terms of use must be
+' respected, and the first one is to present yourself with a real User-Agent -
+' below, in OnCreate, there is the one of this example: in a real app you
+' must put the name of the app and a contact.
+'
+' The calls are three:
+'
+'     blPosition.Start()                  in OnCreate
+'     mappa.Update(mx, my, mw, mh)        in OnUpdate, after ReadTouch()
+'     mappa.Draw(cv, mx, my, mw, mh)      in OnRender
+'
+' Commands: you drag with your finger, you zoom with a double tap (or with
+' the wheel on the PC) and with the two buttons. "Go to me" brings the map
+' back onto the GPS position.
+'
+' The native code for now is ONLY on Android: that is where a GPS makes
+' sense. On the PC the map draws a grid with the tile numbers instead of the
+' images - the geometry can still be tested - and the position is set with
+' blPosition.SetManual().
+'
+' CX modules by bosh77
+'
+
+#GLFW_USE_MINGW=False
+'#GLFW_USE_MINGW=True
+
+#GLFW_GCC_MSIZE_WINNT="32"
+
+#GLFW_WINDOW_TITLE = "boshlibs - gps and map"
+#GLFW_WINDOW_WIDTH = 760
+#GLFW_WINDOW_HEIGHT = 520
+#GLFW_WINDOW_RESIZABLE = True
+
+#ANDROID_APP_PACKAGE="com.kreativesoft.blgps"
+#ANDROID_APP_LABEL="boshlibs blgps"
+
+
+'note: -- ANDROID NEW VERSION --
+#ANDROID_MIN_SDK_VERSION = "18"
+#ANDROID_TARGET_SDK_VERSION = "37"
+#ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
+#ANDROID_GRADLE_VERSION = "9.1.1"
+#ANDROID_GRADLE_DISTRIBUTION = "gradle-9.3.1-bin.zip"
+#ANDROID_REPOSITORIES = ""
+'#ANDROID_MANIFEST_MAIN + = "<uses-permission android:name=~qandroid.permission.INTERNET~q />"
+#ANDROID_JAVA_SOURCE_VERSION = "VERSION_17"
+#ANDROID_JAVA_TARGET_VERSION = "VERSION_17"
+
+
+' The network and position permissions must NOT be declared here: the blNet
+' and blGPS modules put them in the manifest, those are the ones that know
+' they need them.
+
+
+Import mojo2
+
+Import boshlibs
+
+
+Function Main()
+
+	New App8()
+
+End
+
+
+Class App8 Extends App
+
+	Const BASE_H:Float = 520.0
+	Const ZOOM:Float = 3.0
+
+	Field cv:Canvas
+
+	Field mappa:blMap
+
+	Field pan:blPanel
+
+	Field btPiu:blButton
+	Field btMeno:blButton
+	Field btIo:blButton
+
+	Field ddFonte:blDropdown
+
+	Field msg:String
+
+	' The last position on which the marker was placed: it is rebuilt only
+	' when it really changes, not every frame.
+	Field mklat:Float
+	Field mklon:Float
+	Field hasmk:Bool
+
+
+	Method K:Float()
+
+		Local k:Float = DeviceHeight() / BASE_H
+
+		If k > ZOOM Then k = ZOOM
+		If k < 1 Then k = 1
+
+		Return k
+
+	End
+
+
+	'#########################################################################
+	' THE MAP BOX
+	'
+	' It sits under the command bar and ends above the bottom margin: on
+	' Android the system navigation bar covers the lower part of the
+	' screen, and a command resting on the edge could not be tapped.
+	'#########################################################################
+
+	Method BarraH:Float()
+
+		Return 42 * K()
+
+	End
+
+	Method MappaY:Float()
+
+		Return BarraH() + 46 * K()
+
+	End
+
+	Method MappaH:Float()
+
+		Local h:Float = DeviceHeight() - MappaY() - 90 * K()
+
+		If h < 80 * K() Then h = 80 * K()
+
+		Return h
+
+	End
+
+
+	Method OnCreate()
+
+		SetDeviceWindow(760, 520, 4 + 16)
+		SetUpdateRate(60)
+
+		cv = New Canvas
+
+		' HOW an app using OpenStreetMap tiles must present itself.
+		' With the generic stock User-Agent the service can answer 403 and
+		' the map stays empty without explaining why.
+		blHttpRequest.SetUserAgent("boshlibs-example/1.0 (Cerberus X; bosh77)")
+
+		' Rome, until we know where we are.
+		mappa = New blMap(41.9028, 12.4964, 13)
+
+		mappa.scale = K()
+
+		' On the PC there is no receiver: a position is set by hand, so the
+		' marker and the "Go to me" button can still be tested.
+		If Not blPosition.Available() Then blPosition.SetManual(45.4642, 9.1900)
+
+		blPosition.Start()
+
+		blControlsTheme.scale = K()
+
+		Costruisci()
+
+	End
+
+
+	Method Costruisci:Void()
+
+		Local k:Float = K()
+
+		pan = New blPanel()
+
+		Local bh:Float = BarraH()
+
+		' Widths designed to fit even on a narrow screen: if they do not
+		' fit, they share what is there.
+		Local wpiu:Float = 56 * k
+		Local wio:Float = 130 * k
+		Local wdd:Float = 220 * k
+
+		Local tot:Float = wpiu * 2 + wio + wdd + 12 * k
+
+		If tot > DeviceWidth() Then
+
+			Local disp:Float = DeviceWidth() - 12 * k
+
+			wpiu = disp * 0.13
+			wio = disp * 0.30
+			wdd = disp * 0.44
+
+		EndIf
+
+		Local x:Float = 0
+
+		btPiu = pan.AddButton(x, 0, wpiu, bh, "+")
+		x += wpiu + 4 * k
+
+		btMeno = pan.AddButton(x, 0, wpiu, bh, "-")
+		x += wpiu + 4 * k
+
+		btIo = pan.AddButton(x, 0, wio, bh, "Go to me")
+		x += wio + 4 * k
+
+		ddFonte = pan.AddDropdown(x, 0, wdd, bh, ["Street", "Topographic", "Satellite"], 0)
+
+	End
+
+
+	'#########################################################################
+	' UPDATE
+	'#########################################################################
+
+	Method OnUpdate()
+
+		' Always first: it is the only one that reads mouse and keys.
+		ReadTouch()
+
+		' The command bar sits on top: it is updated before the map.
+		pan.Update()
+
+		If btPiu.Clicked() Then mappa.ZoomIn()
+		If btMeno.Clicked() Then mappa.ZoomOut()
+
+		If btIo.Clicked() Then
+
+			If blPosition.HasFix() Then
+
+				mappa.SetCenter(blPosition.Lat(), blPosition.Lon())
+				mappa.follow = True
+
+			EndIf
+
+		EndIf
+
+		If ddFonte.Changed() Then CambiaFonte(ddFonte.Selected())
+
+		mappa.Update(0, MappaY(), DeviceWidth(), MappaH())
+
+		' Until the user has dragged, the map chases the GPS.
+		If mappa.follow And blPosition.HasFix() Then
+
+			mappa.SetCenter(blPosition.Lat(), blPosition.Lon())
+
+		EndIf
+
+		' The marker is rebuilt only when the position really changes:
+		' AddMarker appends, it does not replace.
+		If blPosition.HasFix() Then
+
+			If Not hasmk Or blPosition.Lat() <> mklat Or blPosition.Lon() <> mklon Then
+
+				mklat = blPosition.Lat()
+				mklon = blPosition.Lon()
+				hasmk = True
+
+				mappa.ClearMarkers()
+				mappa.AddMarker(mklat, mklon)
+
+			EndIf
+
+		EndIf
+
+		msg = blPosition.StateText()
+
+	End
+
+
+	Method CambiaFonte:Void(i:Int)
+
+		Select i
+
+			Case 1
+
+				mappa.SetTileUrl("https://tile.opentopomap.org/{z}/{x}/{y}.png",
+					"(c) OpenStreetMap contributors, SRTM - (c) OpenTopoMap (CC-BY-SA)")
+
+				mappa.maxzoom = 17
+
+			Case 2
+
+				mappa.SetTileUrl("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+					"Imagery (c) Esri")
+
+				mappa.maxzoom = 19
+
+			Default
+
+				mappa.SetTileUrl("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+					"(c) OpenStreetMap contributors")
+
+				mappa.maxzoom = 19
+
+		End
+
+	End
+
+
+	'#########################################################################
+	' DRAWING
+	'#########################################################################
+
+	Method OnRender()
+
+		' The full-screen scissor BEFORE the Clear: Clear fills only the area
+		' of the current scissor, and if it was left narrowed by a previous
+		' drawing the old frame stays on screen and you get flickering.
+		cv.SetScissor(0, 0, DeviceWidth(), DeviceHeight())
+
+		cv.Clear 0.10, 0.11, 0.13
+
+		Local k:Float = K()
+
+		' --- the two status lines, between the bar and the map
+
+		cv.SetColor COL_WHITE
+		Testo("BOSHLIBS - GPS AND MAP   z" + mappa.zoom, 6 * k, BarraH() + 6 * k)
+
+		cv.SetColor COL_CORNFLOWERBLUE
+
+		Local r2:String = msg
+
+		If blPosition.HasFix() Then
+
+			r2 = r2 + "   " + Gradi(blPosition.Lat()) + ", " + Gradi(blPosition.Lon())
+
+		EndIf
+
+		Testo(r2, 6 * k, BarraH() + 26 * k)
+
+		' --- the map
+
+		Local my:Float = MappaY()
+		Local mh:Float = MappaH()
+
+		mappa.Draw(cv, 0, my, DeviceWidth(), mh)
+
+		' The accuracy halo must be drawn AFTER the map and inside its
+		' box: it is GPS information, not map information, so the app
+		' puts it there.
+		If blPosition.HasFix() Then
+
+			mappa.DrawAccuracy(cv, blPosition.Lat(), blPosition.Lon(),
+				blPosition.Accuracy(), 0, my, DeviceWidth(), mh)
+
+		EndIf
+
+		' --- under the map: how many tiles and how many requests in flight
+
+		cv.SetColor COL_SLATEGRAY
+
+		Local sotto:String = "tiles " + mappa.TileCount() + "   arriving " + mappa.Pending()
+
+		If Not blHttpRequest.Available() Then sotto = "no native networking: try on Android"
+
+		Testo(sotto, 6 * k, my + mh + 8 * k)
+
+		' --- the controls, last: the open dropdown must stay above everything
+		pan.Draw(cv)
+
+		cv.Flush
+
+	End
+
+
+	' Degrees with five decimals: it is about one metre, and a Float holds
+	' no more than that.
+	Method Gradi:String(v:Float)
+
+		Local neg:Bool = v < 0
+		If neg Then v = -v
+
+		Local i:Int = Int(v)
+		Local f:Int = Int((v - i) * 100000.0 + 0.5)
+
+		Local s:String = String(f)
+
+		While s.Length < 5
+			s = "0" + s
+		Wend
+
+		If neg Then Return "-" + i + "." + s
+
+		Return i + "." + s
+
+	End
+
+
+	Method Testo:Void(s:String, x:Float, y:Float)
+
+		Local k:Float = K()
+
+		cv.PushMatrix()
+		cv.Translate(x, y)
+		cv.Scale(k, k)
+		cv.DrawText(s, 0, 0)
+		cv.PopMatrix()
+
+	End
+
+End
